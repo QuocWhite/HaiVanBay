@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- Favicon -->
+    <link
+      rel="icon"
+      type="image/x-icon"
+      href="/media/logos/salepro/favicon.ico"
+    />
+    <link
+      rel="shortcut icon"
+      type="image/x-icon"
+      href="/media/logos/salepro/favicon.ico"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="32x32"
+      href="/media/logos/salepro/favicon.png"
+    />
+    <link
+      rel="icon"
+      type="image/png"
+      sizes="16x16"
+      href="/media/logos/salepro/favicon.png"
+    />
+    <link
+      rel="apple-touch-icon"
+      sizes="180x180"
+      href="/media/logos/salepro/favicon.png"
+    />
+    <meta name="theme-color" content="#ffffff" />
+
+    <!-- Base meta tags - will be dynamically updated by useDynamicMeta composable -->
+    <title>
+      SalePro - Nền tảng công nghệ hỗ trợ kinh doanh Bất động sản hàng đầu Việt
+      Nam
+    </title>
+    <meta
+      name="description"
+      content="Kết nối khách hàng với những sản phẩm bất động sản giá trị thực thông qua nền tảng công nghệ hiện đại, dịch vụ tư vấn chuyên nghiệp và đội ngũ phân phối uy tín."
+    />
+    <meta
+      name="keywords"
+      content="Mayhomes, Salepro, bất động sản, căn hộ, dự án, bất động sản miền bắc, bất động sản miền nam"
+    />
+    <meta name="author" content="Salepro" />
+
+    <!-- Open Graph meta tags for social sharing -->
+    <meta property="og:site_name" content="Salepro" />
+    <meta property="og:type" content="website" />
+    <meta
+      property="og:title"
+      content="SalePro - Nền tảng công nghệ hỗ trợ kinh doanh Bất động sản hàng đầu Việt Nam"
+    />
+    <meta
+      property="og:description"
+      content="Kết nối khách hàng với những sản phẩm bất động sản giá trị thực thông qua nền tảng công nghệ hiện đại, dịch vụ tư vấn chuyên nghiệp và đội ngũ phân phối uy tín."
+    />
+    <meta
+      property="og:image"
+      content="https://s3-hfx03.fptcloud.com/image-upload/salepro/1766481729674-banner-web-2.webp"
+    />
+    <meta property="og:url" content="https://salepro.com" />
+
+    <!-- Twitter Card meta tags -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:title"
+      content="SalePro - Nền tảng công nghệ hỗ trợ kinh doanh Bất động sản hàng đầu Việt Nam"
+    />
+    <meta
+      name="twitter:description"
+      content="Kết nối khách hàng với những sản phẩm bất động sản giá trị thực thông qua nền tảng công nghệ hiện đại, dịch vụ tư vấn chuyên nghiệp và đội ngũ phân phối uy tín."
+    />
+    <meta
+      name="twitter:image"
+      content="https://s3-hfx03.fptcloud.com/image-upload/salepro/1766481729674-banner-web-2.webp"
+    />
+
+    <!-- Be Vietnam Pro font is loaded from local assets via SCSS -->
+    <link rel="stylesheet" href="/splash-screen.css" />
+
+    <!-- Cache control -->
+    <meta
+      http-equiv="Cache-Control"
+      content="no-store, no-cache, must-revalidate"
+    />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
+    <script type="module" crossorigin src="/js/index.js"></script>
+    <link rel="stylesheet" href="/css/index.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+
+  <body class="page-loading">
+    <!--begin::Theme mode setup on page load-->
+    <script>
+      let themeMode = "system";
+
+      if (localStorage.getItem("kt_theme_mode_value")) {
+        themeMode = localStorage.getItem("kt_theme_mode_value");
+      }
+
+      if (themeMode === "system") {
+        themeMode = window.matchMedia("(prefers-color-scheme: dark)").matches
+          ? "dark"
+          : "light";
+      }
+
+      document.documentElement.setAttribute("data-bs-theme", themeMode);
+      document.documentElement.classList.toggle("dark", themeMode === "dark");
+    </script>
+    <!--end::Theme mode setup on page load-->
+
+    <div id="app"></div>
+
+    <!--begin::Loading markup-->
+    <div id="splash-screen" class="splash-screen">
+      <img
+        id="splash-logo-dark"
+        src="/media/logos/salepro/logo-salepro.png"
+        class="dark-logo"
+        style="max-width: 300px"
+        alt="Logo"
+      />
+      <img
+        id="splash-logo-light"
+        src="/media/logos/salepro/logo-salepro.png"
+        class="light-logo"
+        style="max-width: 300px"
+        alt="Logo"
+      />
+      <div class="loader-wrapper">
+        <span class="loader"></span>
+        <span class="loading-text">Vui lòng chờ...</span>
+      </div>
+    </div>
+    <!--end::Loading markup-->
+
+    <!-- Load dynamic logo from localStorage if available -->
+    <script>
+      (function () {
+        try {
+          function detectDomainSlug() {
+            const hostname = window.location.hostname;
+
+            if (hostname === "localhost" || hostname === "127.0.0.1") {
+              return "";
+            }
+
+            if (hostname.includes(".localhost")) {
+              return hostname.split(".")[0];
+            }
+
+            const parts = hostname.split(".");
+            if (parts.length >= 2) {
+              const slug = parts[0];
+              if (slug === "www" || slug === "localhost") {
+                return "";
+              }
+              return slug;
+            }
+
+            return "";
+          }
+
+          const currentSlug = detectDomainSlug();
+
+          if (currentSlug) {
+            const domainConfigs = localStorage.getItem("domain_configs");
+            if (domainConfigs) {
+              const configs = JSON.parse(domainConfigs);
+              const domainConfig = configs.find((c) => c.slug === currentSlug);
+              if (domainConfig && domainConfig.logo_url) {
+                const darkLogo = document.getElementById("splash-logo-dark");
+                const lightLogo = document.getElementById("splash-logo-light");
+                if (darkLogo) darkLogo.src = domainConfig.logo_url;
+                if (lightLogo) lightLogo.src = domainConfig.logo_url;
+              }
+            }
+          }
+        } catch (e) {
+          // Silent fail - use default logos
+        }
+      })();
+    </script>
+
+    
+  </body>
+</html>
+
