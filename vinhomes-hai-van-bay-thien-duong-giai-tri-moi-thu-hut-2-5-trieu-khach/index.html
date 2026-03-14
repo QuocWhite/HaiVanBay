@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html class="avada-html-layout-wide avada-html-header-position-top avada-is-100-percent-template" lang="vi" prefix="og: http://ogp.me/ns# fb: http://ogp.me/ns/fb#" prefix="og: https://ogp.me/ns#">
+<head>
+	<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+	<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<!-- Meta Pixel Code - MPCAPI Meta Tracking -->
+<script data-no-rocket="1">
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '1187025203562548');
+/**
+ * MPCAPI AN/In-App reliability patch:
+ * - Fire PageView in HEAD (Pixel + CAPI) with shared event_id for dedupe
+ * - Keep the rest of plugin behavior unchanged
+ */
+(function(){
+    try {
+        var cfg = {
+            ajaxUrl: "https:\/\/vinhomehaivanbay.com\/wp-admin\/admin-ajax.php",
+            nonce: "cb63bbb6c7",
+            enablePixel: true,
+            enableCapi: true,
+            enablePageview: true,
+            consoleLog: false        };
+
+
+        // External ID (head-safe)
+        // Ensure external_id exists BEFORE firing PageView in head so we don't send a second PageView later.
+        function mpcapiGetCookie(name) {
+            try {
+                var m = document.cookie.match('(^|; )' + name + '=([^;]*)');
+                return m ? m[2] : '';
+            } catch (e) { return ''; }
+        }
+        function mpcapiSetCookie(name, value, days) {
+            try {
+                var d = new Date();
+                d.setTime(d.getTime() + (days*24*60*60*1000));
+                var expires = 'expires=' + d.toUTCString();
+                var secure = (location.protocol === 'https:') ? '; Secure' : '';
+                document.cookie = name + '=' + encodeURIComponent(value) + '; ' + expires + '; path=/; SameSite=Lax' + secure;
+            } catch (e) {}
+        }
+        function mpcapiUUIDv4() {
+            // Prefer crypto.randomUUID when available
+            try {
+                if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                    return window.crypto.randomUUID();
+                }
+            } catch (e) {}
+            // Fallback
+            var d = new Date().getTime();
+            var d2 = (performance && performance.now && (performance.now()*1000)) || 0;
+            return 'xxxxxxxxxxxx4xxxyxxxxxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                var r = Math.random() * 16;
+                if (d > 0) { r = (d + r) % 16 | 0; d = Math.floor(d/16); }
+                else { r = (d2 + r) % 16 | 0; d2 = Math.floor(d2/16); }
+                return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+            });
+        }
+        function mpcapiGetOrCreateExternalId() {
+            var key = 'mpcapi_external_id';
+            var ext = '';
+            try {
+                ext = (window.localStorage && localStorage.getItem(key)) ? String(localStorage.getItem(key)) : '';
+            } catch (e) {}
+            if (!ext) {
+                try { ext = mpcapiGetCookie(key) ? decodeURIComponent(mpcapiGetCookie(key)) : ''; } catch (e) {}
+            }
+            if (!ext) {
+                ext = 'mpcapi_' + mpcapiUUIDv4();
+            }
+            // Persist (match existing pixel.js behavior: 365 days)
+            try { if (window.localStorage) localStorage.setItem(key, ext); } catch (e) {}
+            mpcapiSetCookie(key, ext, 365);
+            return ext;
+        }
+
+        /**
+         * IMPORTANT: wp_localize_script outputs "var mpcapiMetaPixel = {...}" at the script tag,
+         * which can overwrite any properties we set on window.mpcapiMetaPixel in <head>.
+         * To make the "PageView sent in head" flag survive, we store it in a dedicated global.
+         */
+        window.__mpcapi_pageview = window.__mpcapi_pageview || {};
+
+        // Delay strategy (user request): send a bit later to increase data completeness (fbp),
+        // but keep a pagehide fallback so we don't lose events on fast exits.
+        if (!cfg.enablePageview) return;
+
+        // Shared event_id for Pixel/CAPI dedupe (persist per page-load)
+        function mpcapiGenEventId() {
+            // IMPORTANT: must be generated at runtime (not PHP) to avoid page-cache reusing the same event_id
+            var ts = Date.now();
+            var rand = '';
+            try {
+                var a = new Uint8Array(8);
+                (window.crypto || window.msCrypto).getRandomValues(a);
+                for (var i = 0; i < a.length; i++) {
+                    rand += ('0' + a[i].toString(16)).slice(-2);
+                }
+            } catch (e) {
+                rand = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+            }
+            rand = String(rand).replace(/[^a-z0-9]/gi, '').slice(0, 10);
+            return 'mpcapi_' + ts + '_' + rand;
+        }
+
+        // Shared event_id for Pixel/CAPI dedupe (persist per page-load)
+        var eventId = window.__mpcapi_pageview.event_id || mpcapiGenEventId();
+        window.__mpcapi_pageview.event_id = eventId;
+
+        // Mark that PageView is managed here.
+        // Pixel PageView is deferred to pixel.js (footer) for better desktop consistency.
+        window.__mpcapi_pageview.managed = true;
+        window.__mpcapi_pageview.defer_pixel = true;
+
+        // Ensure external_id exists (first-party) before sending
+        var externalId = mpcapiGetOrCreateExternalId();
+        if (!externalId) { return; }
+        window.__mpcapi_pageview.external_id = externalId;
+
+        function mpcapiDecodeCookie(val) {
+            try { return decodeURIComponent(val || ''); } catch (e) { return val || ''; }
+        }
+        function mpcapiGetCookieDecoded(name) {
+            try {
+                var raw = mpcapiGetCookie(name);
+                return raw ? mpcapiDecodeCookie(raw) : '';
+            } catch (e) { return ''; }
+        }
+        function mpcapiGetFbp() { return mpcapiGetOrCreateFbp(); }
+function mpcapiGetOrCreateFbp() {
+    var existing = mpcapiGetCookieDecoded('_fbp');
+    if (existing) return existing;
+    // Seed _fbp early so CAPI has it even before fbq/PageView runs
+    try {
+        var ts = Date.now(); // ms (matches fbq cookie style)
+        var rnd = '';
+        try { rnd = String(Math.floor(Math.random() * 1e18)); } catch (e) { rnd = ''; }
+        rnd = (rnd || '').replace(/[^0-9]/g, '').slice(0, 18);
+        if (!rnd) rnd = String(Math.floor(Math.random() * 1e9));
+        var fbp = 'fb.1.' + ts + '.' + rnd;
+        mpcapiSetCookie('_fbp', fbp, 90);
+        return fbp;
+    } catch (e) { return ''; }
+}
+
+        function mpcapiGetFbc() {
+        // Try cookie first
+        var existing = mpcapiGetCookieDecoded('_fbc');
+        if (existing) return existing;
+
+        // Build from fbclid if present
+        var fbclid = '';
+        try {
+          fbclid = (new URLSearchParams(window.location.search)).get('fbclid') || '';
+        } catch (e) {}
+
+        if (!fbclid) return '';
+
+        // Meta-style: fbc uses the same timestamp as fbp when possible
+        var ts = Date.now();
+        try {
+          var fbpVal = mpcapiGetFbp(); // also seeds _fbp if missing
+          var m = /^fb\.[0-9]+\.(\d+)\./.exec(fbpVal || '');
+          if (m && m[1]) ts = m[1];
+        } catch (e) {}
+
+        var fbc = 'fb.1.' + ts + '.' + fbclid;
+        mpcapiSetCookie('_fbc', encodeURIComponent(fbc), 90);
+        return fbc;
+      }
+
+function mpcapiSendCapiPageView() {
+            try {
+                if (!cfg.enableCapi) return;
+                window.__mpcapi_pageview = window.__mpcapi_pageview || {};
+                if (window.__mpcapi_pageview.capi_sent) return;
+
+                var fbp = mpcapiGetFbp();
+                var fbc = mpcapiGetFbc();
+
+                var form = new URLSearchParams();
+                form.append('action', 'mpcapi_meta_capi_event');
+                form.append('nonce', cfg.nonce);
+                form.append('event_name', 'PageView');
+                form.append('event_id', eventId);
+                form.append('external_id', externalId);
+                form.append('custom_data', JSON.stringify({}));
+                form.append('event_source_url', window.location.href);
+                form.append('fbp', fbp || '');
+                form.append('fbc', fbc || '');
+                form.append('user_email', '');
+                form.append('user_phone', '');
+                form.append('user_first_name', '');
+                form.append('user_last_name', '');
+                form.append('debug_console', cfg.consoleLog ? '1' : '0');
+
+                var body = form.toString();
+
+                // Prefer sendBeacon (better for in-app / bounce)
+                if (navigator && typeof navigator.sendBeacon === 'function') {
+                    navigator.sendBeacon(cfg.ajaxUrl, new Blob([body], { type: 'application/x-www-form-urlencoded; charset=UTF-8' }));
+                } else if (window.fetch) {
+                    fetch(cfg.ajaxUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                        body: body,
+                        keepalive: true,
+                        credentials: 'same-origin'
+                    })['catch'](function(){});
+                }
+                window.__mpcapi_pageview.capi_sent = true;
+            } catch (e) {}
+        }
+
+        // NOTE (v1.0.16.7): We DO NOT fire Pixel PageView in <head> anymore.
+        // Reason: in some desktop cases the Pixel UI still shows PageView as "Pixel ❌ / CAPI ✅".
+        // We keep CAPI PageView in <head> (reliable) but defer Pixel PageView to footer (pixel.js)
+        // where fbq is guaranteed to be ready, improving Pixel PageView consistency on desktop.
+
+        // Timings (tunable)
+        var startTs = Date.now();
+        var capiWaitMs = 900;   // wait up to this for _fbp, then send CAPI anyway
+
+        // CAPI: wait for _fbp up to capiWaitMs to increase match quality
+        var capiPoll = setInterval(function(){
+            try {
+                var elapsed = Date.now() - startTs;
+                var fbpNow = mpcapiGetFbp();
+                if (fbpNow || elapsed >= capiWaitMs) {
+                    clearInterval(capiPoll);
+                    mpcapiSendCapiPageView();
+                }
+            } catch(e) {
+                clearInterval(capiPoll);
+                mpcapiSendCapiPageView();
+            }
+        }, 50);
+
+        // Fast-exit fallback: if user leaves before the timers, send CAPI immediately
+        try {
+            window.addEventListener('pagehide', function(){
+                mpcapiSendCapiPageView();
+            }, { capture: true, once: true });
+        } catch(e) {}
+        } catch(e) {}
+})();
+</script>
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=1187025203562548&ev=PageView&noscript=1"
+/></noscript>
+<!-- End Meta Pixel Code -->
+        
+<!-- Tối ưu hóa công cụ tìm kiếm bởi Rank Math PRO - https://rankmath.com/ -->
+<title>Vinhomes Hải Vân Bay - thiên đường giải trí mới thu hút 2.5 triệu khách - Vinhomes Hải Vân Bay</title>
+<link data-rocket-prefetch href="https://www.googletagmanager.com" rel="dns-prefetch">
+<link data-rocket-prefetch href="https://connect.facebook.net" rel="dns-prefetch">
+<link data-rocket-prefetch href="https://googleads.g.doubleclick.net" rel="dns-prefetch">
+<link data-rocket-prefetch href="https://my.linkngon.com" rel="dns-prefetch">
+<link data-rocket-prefetch href="https://aladigi.com" rel="dns-prefetch">
+<link data-rocket-prefetch href="https://cms.datacenters.vn" rel="dns-prefetch"><link rel="preload" data-rocket-preload as="image" href="../wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" imagesrcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-200x150.webp 200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-300x225.webp 300w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-400x300.webp 400w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-600x450.webp 600w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-768x575.webp 768w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-800x599.webp 800w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-1024x767.webp 1024w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-1200x899.webp 1200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp 1300w" imagesizes="1300px" fetchpriority="high">
+<meta name="description" content="Nằm dưới chân đèo Hải Vân huyền thoại, một &quot;viên ngọc quý&quot; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của Vinhomes Làng Vân,"/>
+<meta name="robots" content="follow, index, max-snippet:-1, max-video-preview:-1, max-image-preview:large"/>
+<link rel="canonical" href="index.html" />
+<meta property="og:locale" content="vi_VN" />
+<meta property="og:type" content="article" />
+<meta property="og:title" content="Vinhomes Hải Vân Bay - thiên đường giải trí mới thu hút 2.5 triệu khách - Vinhomes Hải Vân Bay" />
+<meta property="og:description" content="Nằm dưới chân đèo Hải Vân huyền thoại, một &quot;viên ngọc quý&quot; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của Vinhomes Làng Vân," />
+<meta property="og:url" content="https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/" />
+<meta property="og:site_name" content="Vinhomes Hải Vân Bay" />
+<meta property="article:section" content="Tin Tức" />
+<meta property="og:image" content="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" />
+<meta property="og:image:secure_url" content="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" />
+<meta property="og:image:width" content="1300" />
+<meta property="og:image:height" content="974" />
+<meta property="og:image:alt" content="Đại nhạc hội tại Vinhomes Hải Vân Bay thu hút hàng chục nghìn người tham dự. Ảnh: Vinhomes" />
+<meta property="og:image:type" content="image/webp" />
+<meta property="article:published_time" content="2025-08-29T15:33:35+07:00" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Vinhomes Hải Vân Bay - thiên đường giải trí mới thu hút 2.5 triệu khách - Vinhomes Hải Vân Bay" />
+<meta name="twitter:description" content="Nằm dưới chân đèo Hải Vân huyền thoại, một &quot;viên ngọc quý&quot; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của Vinhomes Làng Vân," />
+<meta name="twitter:image" content="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" />
+<meta name="twitter:label1" content="Được viết bởi" />
+<meta name="twitter:data1" content="ThanhThu" />
+<meta name="twitter:label2" content="Thời gian để đọc" />
+<meta name="twitter:data2" content="6 phút" />
+<script type="application/ld+json" class="rank-math-schema-pro">{"@context":"https://schema.org","@graph":[{"@type":"Place","@id":"https://vinhomehaivanbay.com/#place","geo":{"@type":"GeoCoordinates","latitude":"16.158157136749697","longitude":"108.13667191114284"},"hasMap":"https://www.google.com/maps/search/?api=1&amp;query=16.158157136749697,108.13667191114284","address":{"@type":"PostalAddress","streetAddress":"L\u00e0ng V\u00e2n, Ph\u01b0\u1eddng H\u00f2a Hi\u1ec7p B\u1eafc","addressLocality":"Li\u00ean Chi\u1ec3u","addressRegion":"\u0110\u00e0 N\u1eb5ng","postalCode":"550000","addressCountry":"Vi\u1ec7t Nam"}},{"@type":"Organization","@id":"https://vinhomehaivanbay.com/#organization","name":"Vinhomes H\u1ea3i V\u00e2n Bay","url":"https://vinhomehaivanbay.com","email":"thanhtung.bdsmaster@gmail.com","address":{"@type":"PostalAddress","streetAddress":"L\u00e0ng V\u00e2n, Ph\u01b0\u1eddng H\u00f2a Hi\u1ec7p B\u1eafc","addressLocality":"Li\u00ean Chi\u1ec3u","addressRegion":"\u0110\u00e0 N\u1eb5ng","postalCode":"550000","addressCountry":"Vi\u1ec7t Nam"},"logo":{"@type":"ImageObject","@id":"https://vinhomehaivanbay.com/#logo","url":"https://vinhomehaivanbay.com/wp-content/uploads/2023/07/Logo-Vinhomes.jpg","contentUrl":"https://vinhomehaivanbay.com/wp-content/uploads/2023/07/Logo-Vinhomes.jpg","caption":"Vinhomes H\u1ea3i V\u00e2n Bay","inLanguage":"vi","width":"1500","height":"1500"},"contactPoint":[{"@type":"ContactPoint","telephone":"0789355779","contactType":"sales"}],"description":"Vinhomes H\u1ea3i V\u00e2n Bay l\u00e0 si\u00eau d\u1ef1 \u00e1n \u201cth\u00e0nh ph\u1ed1 ngh\u1ec9 d\u01b0\u1ee1ng\u201d quy m\u00f4 512 hecta v\u1edbi t\u1ed5ng v\u1ed1n \u0111\u1ea7u t\u01b0 44.000 t\u1ef7 \u0111\u1ed3ng, t\u1ecda l\u1ea1c t\u1ea1i v\u1ecb tr\u00ed \u0111\u1eafc \u0111\u1ecba d\u01b0\u1edbi ch\u00e2n \u0111\u00e8o H\u1ea3i V\u00e2n \u2013 \u0110\u00e0 N\u1eb5ng, do T\u1eadp \u0111o\u00e0n Vingroup ph\u00e1t tri\u1ec3n. \u0110\u00e2y l\u00e0 t\u1ed5 h\u1ee3p ngh\u1ec9 d\u01b0\u1ee1ng \u2013 \u0111\u00f4 th\u1ecb cao c\u1ea5p s\u1edf h\u1eefu 5.928 c\u0103n bi\u1ec7t th\u1ef1 th\u1ea5p t\u1ea7ng \u0111a phong c\u00e1ch, v\u1edbi h\u01a1n 90% s\u1ea3n ph\u1ea9m c\u00f3 ph\u00e1p l\u00fd s\u1edf h\u1eefu l\u00e2u d\u00e0i, h\u1ee9a h\u1eb9n tr\u1edf th\u00e0nh bi\u1ec3u t\u01b0\u1ee3ng m\u1edbi c\u1ee7a b\u1ea5t \u0111\u1ed9ng s\u1ea3n ngh\u1ec9 d\u01b0\u1ee1ng mi\u1ec1n Trung. Vinhomes H\u1ea3i V\u00e2n Bay mang \u0111\u1ebfn c\u01a1 h\u1ed9i \u0111\u1ea7u t\u01b0 sinh l\u1eddi b\u1ec1n v\u1eefng v\u00e0 kh\u00f4ng gian an c\u01b0 l\u00fd t\u01b0\u1edfng cho nh\u1eefng gia \u0111\u00ecnh tinh hoa khao kh\u00e1t phong c\u00e1ch s\u1ed1ng th\u01b0\u1ee3ng l\u01b0u gi\u1eefa thi\u00ean nhi\u00ean nguy\u00ean b\u1ea3n.","legalName":"Vinhomes H\u1ea3i V\u00e2n Bay","location":{"@id":"https://vinhomehaivanbay.com/#place"}},{"@type":"WebSite","@id":"https://vinhomehaivanbay.com/#website","url":"https://vinhomehaivanbay.com","name":"Vinhomes H\u1ea3i V\u00e2n Bay","alternateName":"Vinhomes H\u1ea3i V\u00e2n Bay","publisher":{"@id":"https://vinhomehaivanbay.com/#organization"},"inLanguage":"vi"},{"@type":"ImageObject","@id":"https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp","url":"https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp","width":"1300","height":"974","caption":"\u0110\u1ea1i nh\u1ea1c h\u1ed9i t\u1ea1i Vinhomes H\u1ea3i V\u00e2n Bay thu h\u00fat h\u00e0ng ch\u1ee5c ngh\u00ecn ng\u01b0\u1eddi tham d\u1ef1. \u1ea2nh: Vinhomes","inLanguage":"vi"},{"@type":"BreadcrumbList","@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#breadcrumb","itemListElement":[{"@type":"ListItem","position":"1","item":{"@id":"https://vinhomehaivanbay.com","name":"Trang ch\u1ee7"}},{"@type":"ListItem","position":"2","item":{"@id":"https://vinhomehaivanbay.com/tin-tuc/","name":"Tin T\u1ee9c"}},{"@type":"ListItem","position":"3","item":{"@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/","name":"Vinhomes H\u1ea3i V\u00e2n Bay &#8211; thi\u00ean \u0111\u01b0\u1eddng gi\u1ea3i tr\u00ed m\u1edbi thu h\u00fat 2.5 tri\u1ec7u kh\u00e1ch"}}]},{"@type":"WebPage","@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#webpage","url":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/","name":"Vinhomes H\u1ea3i V\u00e2n Bay - thi\u00ean \u0111\u01b0\u1eddng gi\u1ea3i tr\u00ed m\u1edbi thu h\u00fat 2.5 tri\u1ec7u kh\u00e1ch - Vinhomes H\u1ea3i V\u00e2n Bay","datePublished":"2025-08-29T15:33:35+07:00","dateModified":"2025-08-29T15:33:35+07:00","isPartOf":{"@id":"https://vinhomehaivanbay.com/#website"},"primaryImageOfPage":{"@id":"https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp"},"inLanguage":"vi","breadcrumb":{"@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#breadcrumb"}},{"@type":"Person","@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#author","name":"ThanhThu","image":{"@type":"ImageObject","@id":"https://secure.gravatar.com/avatar/ce9833f5271d846f72eb9267d52f22bc08ec1e3408fe9471a0cf1158fbb38603?s=96&amp;d=mm&amp;r=g","url":"https://secure.gravatar.com/avatar/ce9833f5271d846f72eb9267d52f22bc08ec1e3408fe9471a0cf1158fbb38603?s=96&amp;d=mm&amp;r=g","caption":"ThanhThu","inLanguage":"vi"},"sameAs":["https://vinhomehaivanbay.com"],"worksFor":{"@id":"https://vinhomehaivanbay.com/#organization"}},{"@type":"BlogPosting","headline":"Vinhomes H\u1ea3i V\u00e2n Bay - thi\u00ean \u0111\u01b0\u1eddng gi\u1ea3i tr\u00ed m\u1edbi thu h\u00fat 2.5 tri\u1ec7u kh\u00e1ch - Vinhomes H\u1ea3i V\u00e2n Bay","datePublished":"2025-08-29T15:33:35+07:00","dateModified":"2025-08-29T15:33:35+07:00","articleSection":"Tin T\u1ee9c","author":{"@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#author","name":"ThanhThu"},"publisher":{"@id":"https://vinhomehaivanbay.com/#organization"},"description":"N\u1eb1m d\u01b0\u1edbi ch\u00e2n \u0111\u00e8o H\u1ea3i V\u00e2n huy\u1ec1n tho\u1ea1i, m\u1ed9t &quot;vi\u00ean ng\u1ecdc qu\u00fd&quot; m\u1edbi \u0111ang t\u1ecfa s\u00e1ng tr\u00ean b\u1ea3n \u0111\u1ed3 du l\u1ecbch mi\u1ec1n Trung. T\u01b0\u01a1ng t\u1ef1 nh\u01b0 th\u00e0nh c\u00f4ng c\u1ee7a Vinhomes L\u00e0ng V\u00e2n,","name":"Vinhomes H\u1ea3i V\u00e2n Bay - thi\u00ean \u0111\u01b0\u1eddng gi\u1ea3i tr\u00ed m\u1edbi thu h\u00fat 2.5 tri\u1ec7u kh\u00e1ch - Vinhomes H\u1ea3i V\u00e2n Bay","@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#richSnippet","isPartOf":{"@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#webpage"},"image":{"@id":"https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp"},"inLanguage":"vi","mainEntityOfPage":{"@id":"https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/#webpage"}}]}</script>
+<!-- /Plugin SEO WordPress Rank Math -->
+
+
+<link rel="alternate" type="application/rss+xml" title="Dòng thông tin Vinhomes Hải Vân Bay &raquo;" href="../feed/index.html" />
+<link rel="alternate" type="application/rss+xml" title="Vinhomes Hải Vân Bay &raquo; Dòng bình luận" href="../comments/feed/index.html" />
+					<link rel="shortcut icon" href="../wp-content/uploads/2024/04/Favicon.png" type="image/x-icon" />
+		
+					<!-- Apple Touch Icon -->
+			<link rel="apple-touch-icon" sizes="180x180" href="../wp-content/uploads/2024/04/Apple-Favicon.png">
+		
+					<!-- Android Icon -->
+			<link rel="icon" sizes="192x192" href="../wp-content/uploads/2024/04/Android-Favicon.png">
+		
+					<!-- MS Edge Icon -->
+			<meta name="msapplication-TileImage" content="https://vinhomehaivanbay.com/wp-content/uploads/2024/04/Microsoft-Favicon.png">
+				<link rel="alternate" type="application/rss+xml" title="Vinhomes Hải Vân Bay &raquo; Vinhomes Hải Vân Bay &#8211; thiên đường giải trí mới thu hút 2.5 triệu khách Dòng bình luận" href="feed/index.html" />
+<link rel="alternate" title="oNhúng (JSON)" type="application/json+oembed" href="../wp-json/oembed/1.0/embed%3Furl=https:%252F%252Fvinhomehaivanbay.com%252Fvinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach%252F" />
+<link rel="alternate" title="oNhúng (XML)" type="text/xml+oembed" href="../wp-json/oembed/1.0/embed%3Furl=https:%252F%252Fvinhomehaivanbay.com%252Fvinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach%252F&amp;format=xml" />
+					<meta name="description" content="Nằm dưới chân đèo Hải Vân huyền thoại, một &quot;viên ngọc quý&quot; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của Vinhomes Làng Vân, Vinhomes Hải Vân Bay đang khẳng định vị thế là điểm đến an cư và giải trí hàng đầu với quy mô"/>
+				
+		<meta property="og:locale" content="vi_VN"/>
+		<meta property="og:type" content="article"/>
+		<meta property="og:site_name" content="Vinhomes Hải Vân Bay"/>
+		<meta property="og:title" content="Vinhomes Hải Vân Bay - thiên đường giải trí mới thu hút 2.5 triệu khách - Vinhomes Hải Vân Bay"/>
+				<meta property="og:description" content="Nằm dưới chân đèo Hải Vân huyền thoại, một &quot;viên ngọc quý&quot; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của Vinhomes Làng Vân, Vinhomes Hải Vân Bay đang khẳng định vị thế là điểm đến an cư và giải trí hàng đầu với quy mô"/>
+				<meta property="og:url" content="https://vinhomehaivanbay.com/vinhomes-hai-van-bay-thien-duong-giai-tri-moi-thu-hut-2-5-trieu-khach/"/>
+										<meta property="article:published_time" content="2025-08-29T08:33:35+07:00"/>
+											<meta name="author" content="ThanhThu"/>
+								<meta property="og:image" content="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp"/>
+		<meta property="og:image:width" content="1300"/>
+		<meta property="og:image:height" content="974"/>
+		<meta property="og:image:type" content="image/webp"/>
+				<style id='wp-img-auto-sizes-contain-inline-css' type='text/css'>
+img:is([sizes=auto i],[sizes^="auto," i]){contain-intrinsic-size:3000px 1500px}
+/*# sourceURL=wp-img-auto-sizes-contain-inline-css */
+</style>
+<style id='wp-emoji-styles-inline-css' type='text/css'>
+
+	img.wp-smiley, img.emoji {
+		display: inline !important;
+		border: none !important;
+		box-shadow: none !important;
+		height: 1em !important;
+		width: 1em !important;
+		margin: 0 0.07em !important;
+		vertical-align: -0.1em !important;
+		background: none !important;
+		padding: 0 !important;
+	}
+/*# sourceURL=wp-emoji-styles-inline-css */
+</style>
+<link rel='stylesheet' id='wp-components-css' href='../wp-includes/css/dist/components/style.min.css%3Fver=6640932942c7acd8f4f60648534b04be.css' type='text/css' media='all' />
+<link rel='stylesheet' id='wp-preferences-css' href='../wp-includes/css/dist/preferences/style.min.css%3Fver=6640932942c7acd8f4f60648534b04be.css' type='text/css' media='all' />
+<link rel='stylesheet' id='wp-block-editor-css' href='../wp-includes/css/dist/block-editor/style.min.css%3Fver=6640932942c7acd8f4f60648534b04be.css' type='text/css' media='all' />
+<link data-minify="1" rel='stylesheet' id='popup-maker-block-library-style-css' href='../wp-content/cache/min/1/wp-content/plugins/popup-maker/dist/packages/block-library-style.css%3Fver=1773110096.css' type='text/css' media='all' />
+<style id='global-styles-inline-css' type='text/css'>
+:root{--wp--preset--aspect-ratio--square: 1;--wp--preset--aspect-ratio--4-3: 4/3;--wp--preset--aspect-ratio--3-4: 3/4;--wp--preset--aspect-ratio--3-2: 3/2;--wp--preset--aspect-ratio--2-3: 2/3;--wp--preset--aspect-ratio--16-9: 16/9;--wp--preset--aspect-ratio--9-16: 9/16;--wp--preset--color--black: #000000;--wp--preset--color--cyan-bluish-gray: #abb8c3;--wp--preset--color--white: #ffffff;--wp--preset--color--pale-pink: #f78da7;--wp--preset--color--vivid-red: #cf2e2e;--wp--preset--color--luminous-vivid-orange: #ff6900;--wp--preset--color--luminous-vivid-amber: #fcb900;--wp--preset--color--light-green-cyan: #7bdcb5;--wp--preset--color--vivid-green-cyan: #00d084;--wp--preset--color--pale-cyan-blue: #8ed1fc;--wp--preset--color--vivid-cyan-blue: #0693e3;--wp--preset--color--vivid-purple: #9b51e0;--wp--preset--color--awb-color-1: #ffffff;--wp--preset--color--awb-color-2: #f9f9fb;--wp--preset--color--awb-color-3: #f2f3f5;--wp--preset--color--awb-color-4: #65bd7d;--wp--preset--color--awb-color-5: #198fd9;--wp--preset--color--awb-color-6: #434549;--wp--preset--color--awb-color-7: #212326;--wp--preset--color--awb-color-8: #141617;--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple: linear-gradient(135deg,rgb(6,147,227) 0%,rgb(155,81,224) 100%);--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan: linear-gradient(135deg,rgb(122,220,180) 0%,rgb(0,208,130) 100%);--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange: linear-gradient(135deg,rgb(252,185,0) 0%,rgb(255,105,0) 100%);--wp--preset--gradient--luminous-vivid-orange-to-vivid-red: linear-gradient(135deg,rgb(255,105,0) 0%,rgb(207,46,46) 100%);--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray: linear-gradient(135deg,rgb(238,238,238) 0%,rgb(169,184,195) 100%);--wp--preset--gradient--cool-to-warm-spectrum: linear-gradient(135deg,rgb(74,234,220) 0%,rgb(151,120,209) 20%,rgb(207,42,186) 40%,rgb(238,44,130) 60%,rgb(251,105,98) 80%,rgb(254,248,76) 100%);--wp--preset--gradient--blush-light-purple: linear-gradient(135deg,rgb(255,206,236) 0%,rgb(152,150,240) 100%);--wp--preset--gradient--blush-bordeaux: linear-gradient(135deg,rgb(254,205,165) 0%,rgb(254,45,45) 50%,rgb(107,0,62) 100%);--wp--preset--gradient--luminous-dusk: linear-gradient(135deg,rgb(255,203,112) 0%,rgb(199,81,192) 50%,rgb(65,88,208) 100%);--wp--preset--gradient--pale-ocean: linear-gradient(135deg,rgb(255,245,203) 0%,rgb(182,227,212) 50%,rgb(51,167,181) 100%);--wp--preset--gradient--electric-grass: linear-gradient(135deg,rgb(202,248,128) 0%,rgb(113,206,126) 100%);--wp--preset--gradient--midnight: linear-gradient(135deg,rgb(2,3,129) 0%,rgb(40,116,252) 100%);--wp--preset--font-size--small: 12.75px;--wp--preset--font-size--medium: 20px;--wp--preset--font-size--large: 25.5px;--wp--preset--font-size--x-large: 42px;--wp--preset--font-size--normal: 17px;--wp--preset--font-size--xlarge: 34px;--wp--preset--font-size--huge: 51px;--wp--preset--spacing--20: 0.44rem;--wp--preset--spacing--30: 0.67rem;--wp--preset--spacing--40: 1rem;--wp--preset--spacing--50: 1.5rem;--wp--preset--spacing--60: 2.25rem;--wp--preset--spacing--70: 3.38rem;--wp--preset--spacing--80: 5.06rem;--wp--preset--shadow--natural: 6px 6px 9px rgba(0, 0, 0, 0.2);--wp--preset--shadow--deep: 12px 12px 50px rgba(0, 0, 0, 0.4);--wp--preset--shadow--sharp: 6px 6px 0px rgba(0, 0, 0, 0.2);--wp--preset--shadow--outlined: 6px 6px 0px -3px rgb(255, 255, 255), 6px 6px rgb(0, 0, 0);--wp--preset--shadow--crisp: 6px 6px 0px rgb(0, 0, 0);}:where(.is-layout-flex){gap: 0.5em;}:where(.is-layout-grid){gap: 0.5em;}body .is-layout-flex{display: flex;}.is-layout-flex{flex-wrap: wrap;align-items: center;}.is-layout-flex > :is(*, div){margin: 0;}body .is-layout-grid{display: grid;}.is-layout-grid > :is(*, div){margin: 0;}:where(.wp-block-columns.is-layout-flex){gap: 2em;}:where(.wp-block-columns.is-layout-grid){gap: 2em;}:where(.wp-block-post-template.is-layout-flex){gap: 1.25em;}:where(.wp-block-post-template.is-layout-grid){gap: 1.25em;}.has-black-color{color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-color{color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-color{color: var(--wp--preset--color--white) !important;}.has-pale-pink-color{color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-color{color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-color{color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-color{color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-color{color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-color{color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-color{color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-color{color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-color{color: var(--wp--preset--color--vivid-purple) !important;}.has-black-background-color{background-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-background-color{background-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-background-color{background-color: var(--wp--preset--color--white) !important;}.has-pale-pink-background-color{background-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-background-color{background-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-background-color{background-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-background-color{background-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-background-color{background-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-background-color{background-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-background-color{background-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-background-color{background-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-background-color{background-color: var(--wp--preset--color--vivid-purple) !important;}.has-black-border-color{border-color: var(--wp--preset--color--black) !important;}.has-cyan-bluish-gray-border-color{border-color: var(--wp--preset--color--cyan-bluish-gray) !important;}.has-white-border-color{border-color: var(--wp--preset--color--white) !important;}.has-pale-pink-border-color{border-color: var(--wp--preset--color--pale-pink) !important;}.has-vivid-red-border-color{border-color: var(--wp--preset--color--vivid-red) !important;}.has-luminous-vivid-orange-border-color{border-color: var(--wp--preset--color--luminous-vivid-orange) !important;}.has-luminous-vivid-amber-border-color{border-color: var(--wp--preset--color--luminous-vivid-amber) !important;}.has-light-green-cyan-border-color{border-color: var(--wp--preset--color--light-green-cyan) !important;}.has-vivid-green-cyan-border-color{border-color: var(--wp--preset--color--vivid-green-cyan) !important;}.has-pale-cyan-blue-border-color{border-color: var(--wp--preset--color--pale-cyan-blue) !important;}.has-vivid-cyan-blue-border-color{border-color: var(--wp--preset--color--vivid-cyan-blue) !important;}.has-vivid-purple-border-color{border-color: var(--wp--preset--color--vivid-purple) !important;}.has-vivid-cyan-blue-to-vivid-purple-gradient-background{background: var(--wp--preset--gradient--vivid-cyan-blue-to-vivid-purple) !important;}.has-light-green-cyan-to-vivid-green-cyan-gradient-background{background: var(--wp--preset--gradient--light-green-cyan-to-vivid-green-cyan) !important;}.has-luminous-vivid-amber-to-luminous-vivid-orange-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-amber-to-luminous-vivid-orange) !important;}.has-luminous-vivid-orange-to-vivid-red-gradient-background{background: var(--wp--preset--gradient--luminous-vivid-orange-to-vivid-red) !important;}.has-very-light-gray-to-cyan-bluish-gray-gradient-background{background: var(--wp--preset--gradient--very-light-gray-to-cyan-bluish-gray) !important;}.has-cool-to-warm-spectrum-gradient-background{background: var(--wp--preset--gradient--cool-to-warm-spectrum) !important;}.has-blush-light-purple-gradient-background{background: var(--wp--preset--gradient--blush-light-purple) !important;}.has-blush-bordeaux-gradient-background{background: var(--wp--preset--gradient--blush-bordeaux) !important;}.has-luminous-dusk-gradient-background{background: var(--wp--preset--gradient--luminous-dusk) !important;}.has-pale-ocean-gradient-background{background: var(--wp--preset--gradient--pale-ocean) !important;}.has-electric-grass-gradient-background{background: var(--wp--preset--gradient--electric-grass) !important;}.has-midnight-gradient-background{background: var(--wp--preset--gradient--midnight) !important;}.has-small-font-size{font-size: var(--wp--preset--font-size--small) !important;}.has-medium-font-size{font-size: var(--wp--preset--font-size--medium) !important;}.has-large-font-size{font-size: var(--wp--preset--font-size--large) !important;}.has-x-large-font-size{font-size: var(--wp--preset--font-size--x-large) !important;}
+/*# sourceURL=global-styles-inline-css */
+</style>
+
+<link data-minify="1" rel='stylesheet' id='pzf-style-css' href='../wp-content/cache/min/1/wp-content/plugins/button-contact-vr/legacy/css/style.css%3Fver=1773110096.css' type='text/css' media='all' />
+<link data-minify="1" rel='stylesheet' id='popup-maker-site-css' href='../wp-content/cache/min/1/wp-content/uploads/pum/pum-site-styles.css%3Fver=1773110096.css' type='text/css' media='all' />
+<link data-minify="1" rel='stylesheet' id='fusion-dynamic-css-css' href='../wp-content/cache/min/1/wp-content/uploads/fusion-styles/e59fe6a429c32c37a136c0111f5d2a60.min.css%3Fver=1773110161.css' type='text/css' media='all' />
+<style id='rocket-lazyload-inline-css' type='text/css'>
+.rll-youtube-player{position:relative;padding-bottom:56.23%;height:0;overflow:hidden;max-width:100%;}.rll-youtube-player:focus-within{outline: 2px solid currentColor;outline-offset: 5px;}.rll-youtube-player iframe{position:absolute;top:0;left:0;width:100%;height:100%;z-index:100;background:0 0}.rll-youtube-player img{bottom:0;display:block;left:0;margin:auto;max-width:100%;width:100%;position:absolute;right:0;top:0;border:none;height:auto;-webkit-transition:.4s all;-moz-transition:.4s all;transition:.4s all}.rll-youtube-player img:hover{-webkit-filter:brightness(75%)}.rll-youtube-player .play{height:100%;width:100%;left:0;top:0;position:absolute;background:url(../wp-content/plugins/wp-rocket/assets/img/youtube.png) no-repeat center;background-color: transparent !important;cursor:pointer;border:none;}
+/*# sourceURL=rocket-lazyload-inline-css */
+</style>
+<script type="text/javascript" src="../wp-includes/js/jquery/jquery.min.js%3Fver=3.7.1" id="jquery-core-js"></script>
+<link rel="https://api.w.org/" href="../wp-json/index.html" /><link rel="alternate" title="JSON" type="application/json" href="../wp-json/wp/v2/posts/5329" /><link rel="EditURI" type="application/rsd+xml" title="RSD" href="https://vinhomehaivanbay.com/xmlrpc.php?rsd" />
+<link rel="preload" href="../wp-content/themes/Avada/includes/lib/assets/fonts/icomoon/awb-icons.woff" as="font" type="font/woff" crossorigin><link rel="preload" href="../wp-content/themes/Avada/includes/lib/assets/fonts/fontawesome/webfonts/fa-solid-900.woff2" as="font" type="font/woff2" crossorigin><style type="text/css" id="css-fb-visibility">@media screen and (max-width: 640px){.fusion-no-small-visibility{display:none !important;}body .sm-text-align-center{text-align:center !important;}body .sm-text-align-left{text-align:left !important;}body .sm-text-align-right{text-align:right !important;}body .sm-flex-align-center{justify-content:center !important;}body .sm-flex-align-flex-start{justify-content:flex-start !important;}body .sm-flex-align-flex-end{justify-content:flex-end !important;}body .sm-mx-auto{margin-left:auto !important;margin-right:auto !important;}body .sm-ml-auto{margin-left:auto !important;}body .sm-mr-auto{margin-right:auto !important;}body .fusion-absolute-position-small{position:absolute;top:auto;width:100%;}.awb-sticky.awb-sticky-small{ position: sticky; top: var(--awb-sticky-offset,0); }}@media screen and (min-width: 641px) and (max-width: 1024px){.fusion-no-medium-visibility{display:none !important;}body .md-text-align-center{text-align:center !important;}body .md-text-align-left{text-align:left !important;}body .md-text-align-right{text-align:right !important;}body .md-flex-align-center{justify-content:center !important;}body .md-flex-align-flex-start{justify-content:flex-start !important;}body .md-flex-align-flex-end{justify-content:flex-end !important;}body .md-mx-auto{margin-left:auto !important;margin-right:auto !important;}body .md-ml-auto{margin-left:auto !important;}body .md-mr-auto{margin-right:auto !important;}body .fusion-absolute-position-medium{position:absolute;top:auto;width:100%;}.awb-sticky.awb-sticky-medium{ position: sticky; top: var(--awb-sticky-offset,0); }}@media screen and (min-width: 1025px){.fusion-no-large-visibility{display:none !important;}body .lg-text-align-center{text-align:center !important;}body .lg-text-align-left{text-align:left !important;}body .lg-text-align-right{text-align:right !important;}body .lg-flex-align-center{justify-content:center !important;}body .lg-flex-align-flex-start{justify-content:flex-start !important;}body .lg-flex-align-flex-end{justify-content:flex-end !important;}body .lg-mx-auto{margin-left:auto !important;margin-right:auto !important;}body .lg-ml-auto{margin-left:auto !important;}body .lg-mr-auto{margin-right:auto !important;}body .fusion-absolute-position-large{position:absolute;top:auto;width:100%;}.awb-sticky.awb-sticky-large{ position: sticky; top: var(--awb-sticky-offset,0); }}</style>		<script type="text/javascript">
+			var doc = document.documentElement;
+			doc.setAttribute( 'data-useragent', navigator.userAgent );
+		</script>
+		<script>
+jQuery(window).on("fusion-form-ajax-submit-done", async function(event, data) {
+    var formDataSerialized = data.data.get("formData");   
+    var formDataObject = {};
+    formDataSerialized.split("&").forEach(function(item) {
+        var parts = item.split("=");
+        formDataObject[decodeURIComponent(parts[0])] = decodeURIComponent(parts[1] || "");
+    });
+
+    function normalizePhone(phone) {
+        return phone.replace(/[^0-9]/g, "");
+    }
+    async function hashData(data) {
+        const buffer = new TextEncoder().encode(data.trim().toLowerCase());
+        const hash = await crypto.subtle.digest('SHA-256', buffer);
+        return Array.from(new Uint8Array(hash))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    }
+    const HovaTenHashed = await hashData(formDataObject.HovaTen || "");
+    const SoDienThoaiNormalized = normalizePhone(formDataObject.SoDienThoai || "");
+    const SoDienThoaiHashed = await hashData(SoDienThoaiNormalized);
+    const DiaChiEmailHashed = await hashData(formDataObject.DiaChiEmail || "");
+
+    var dataLayer = {
+        event: "DangKyTuVan",
+        HovaTen: HovaTenHashed,
+        SoDienThoai: SoDienThoaiHashed,
+        DiaChiEmail: DiaChiEmailHashed
+    };
+    window.dataLayer.push(dataLayer);
+});
+</script><noscript><style id="rocket-lazyload-nojs-css">.rll-youtube-player, [data-lazy-src]{display:none !important;}</style></noscript>
+	<!-- Google Tag Manager -->
+<script>(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':
+new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],
+j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+})(window,document,'script','dataLayer','GTM-NQSKSQBG');</script>
+<!-- End Google Tag Manager --><meta name="generator" content="WP Rocket 3.20.5" data-wpr-features="wpr_minify_js wpr_lazyload_iframes wpr_preconnect_external_domains wpr_oci wpr_minify_css wpr_preload_links wpr_desktop" /></head>
+
+<body data-rsssl=1 class="wp-singular post-template-default single single-post postid-5329 single-format-standard wp-theme-Avada fusion-image-hovers fusion-pagination-sizing fusion-button_type-flat fusion-button_span-no fusion-button_gradient-linear avada-image-rollover-circle-yes avada-image-rollover-no fusion-body ltr fusion-sticky-header no-tablet-sticky-header no-mobile-sticky-header no-mobile-slidingbar fusion-disable-outline fusion-sub-menu-fade mobile-logo-pos-left layout-wide-mode avada-has-boxed-modal-shadow- layout-scroll-offset-full avada-has-zero-margin-offset-top fusion-top-header menu-text-align-center mobile-menu-design-flyout fusion-show-pagination-text fusion-header-layout-v1 avada-responsive avada-footer-fx-none avada-menu-highlight-style-textcolor fusion-search-form-clean fusion-main-menu-search-overlay fusion-avatar-circle avada-sticky-shrinkage avada-dropdown-styles avada-blog-layout-medium avada-blog-archive-layout-medium avada-header-shadow-no avada-menu-icon-position-left avada-has-megamenu-shadow avada-has-pagetitle-bg-parallax avada-has-main-nav-search-icon avada-has-breadcrumb-mobile-hidden avada-has-titlebar-bar_and_content avada-header-border-color-full-transparent avada-has-pagination-width_height avada-flyout-menu-direction-fade avada-ec-views-v1" data-awb-post-id="5329">
+		<a class="skip-link screen-reader-text" href="index.html#content">Skip to content</a>
+
+	<div  id="boxed-wrapper">
+		
+		<div  id="wrapper" class="fusion-wrapper">
+			<div  id="home" style="position:relative;top:-1px;"></div>
+							
+					
+			<header  class="fusion-header-wrapper">
+				<div class="fusion-header-v1 fusion-logo-alignment fusion-logo-left fusion-sticky-menu-1 fusion-sticky-logo- fusion-mobile-logo-  fusion-mobile-menu-design-flyout fusion-header-has-flyout-menu">
+					<div class="fusion-header-sticky-height"></div>
+<div class="fusion-header">
+	<div class="fusion-row">
+					<div class="fusion-header-has-flyout-menu-content">
+					<div class="fusion-logo" data-margin-top="2px" data-margin-bottom="2px" data-margin-left="0px" data-margin-right="0px">
+			<a class="fusion-logo-link"  href="../index.html" >
+
+						<!-- standard logo -->
+			<img src="../wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay.png" srcset="../wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay.png 1x, ../wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay-Retina.png 2x" width="167" height="75" style="max-height:75px;height:auto;" alt="Vinhomes Hải Vân Bay Logo" data-retina_logo_url="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay-Retina.png" class="fusion-standard-logo" />
+
+			
+					</a>
+		</div>		<nav class="fusion-main-menu" aria-label="Main Menu"><div class="fusion-overlay-search">		<form role="search" class="searchform fusion-search-form  fusion-live-search fusion-search-form-clean" method="get" action="../index.html">
+			<div class="fusion-search-form-content">
+
+				
+				<div class="fusion-search-field search-field">
+					<label><span class="screen-reader-text">Search for:</span>
+													<input type="search" class="s fusion-live-search-input" name="s" id="fusion-live-search-input-0" autocomplete="off" placeholder="Search..." required aria-required="true" aria-label="Search..."/>
+											</label>
+				</div>
+				<div class="fusion-search-button search-button">
+					<input type="submit" class="fusion-search-submit searchsubmit" aria-label="Search" value="&#xf002;" />
+										<div class="fusion-slider-loading"></div>
+									</div>
+
+				
+			</div>
+
+
+							<div class="fusion-search-results-wrapper"><div class="fusion-search-results"></div></div>
+			
+		</form>
+		<div class="fusion-search-spacer"></div><a href="index.html#" role="button" aria-label="Close Search" class="fusion-close-search"></a></div><ul id="menu-main-menu" class="fusion-menu"><li  id="menu-item-510"  class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home menu-item-510"  data-item-id="510"><a  href="../index.html" class="fusion-textcolor-highlight"><span class="menu-text">TRANG CHỦ</span></a></li><li  id="menu-item-2926"  class="menu-item menu-item-type-post_type menu-item-object-page menu-item-2926"  data-item-id="2926"><a  href="../vinhomes/index.html" class="fusion-textcolor-highlight"><span class="menu-text">CHỦ ĐẦU TƯ</span></a></li><li  id="menu-item-1501"  class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1501"  data-item-id="1501"><a  href="../vi-tri/index.html" class="fusion-textcolor-highlight"><span class="menu-text">VỊ TRÍ</span></a></li><li  id="menu-item-1500"  class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1500"  data-item-id="1500"><a  href="../tien-ich/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIỆN ÍCH</span></a></li><li  id="menu-item-3590"  class="menu-item menu-item-type-taxonomy menu-item-object-category menu-item-3590"  data-item-id="3590"><a  href="../tien-do/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIẾN ĐỘ</span></a></li><li  id="menu-item-52"  class="menu-item menu-item-type-taxonomy menu-item-object-category current-post-ancestor current-menu-parent current-post-parent menu-item-52"  data-item-id="52"><a  href="../tin-tuc/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIN TỨC</span></a></li><li  id="menu-item-54"  class="menu-item menu-item-type-post_type menu-item-object-page menu-item-54"  data-item-id="54"><a  href="../lien-he/index.html" class="fusion-textcolor-highlight"><span class="menu-text">LIÊN HỆ</span></a></li><li class="fusion-custom-menu-item fusion-main-menu-search fusion-search-overlay"><a class="fusion-main-menu-icon" href="index.html#" aria-label="Search" data-title="Search" title="Search" role="button" aria-expanded="false"></a></li></ul></nav><nav class="fusion-main-menu fusion-sticky-menu" aria-label="Main Menu Sticky"><div class="fusion-overlay-search">		<form role="search" class="searchform fusion-search-form  fusion-live-search fusion-search-form-clean" method="get" action="../index.html">
+			<div class="fusion-search-form-content">
+
+				
+				<div class="fusion-search-field search-field">
+					<label><span class="screen-reader-text">Search for:</span>
+													<input type="search" class="s fusion-live-search-input" name="s" id="fusion-live-search-input-1" autocomplete="off" placeholder="Search..." required aria-required="true" aria-label="Search..."/>
+											</label>
+				</div>
+				<div class="fusion-search-button search-button">
+					<input type="submit" class="fusion-search-submit searchsubmit" aria-label="Search" value="&#xf002;" />
+										<div class="fusion-slider-loading"></div>
+									</div>
+
+				
+			</div>
+
+
+							<div class="fusion-search-results-wrapper"><div class="fusion-search-results"></div></div>
+			
+		</form>
+		<div class="fusion-search-spacer"></div><a href="index.html#" role="button" aria-label="Close Search" class="fusion-close-search"></a></div><ul id="menu-main-menu-1" class="fusion-menu"><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home menu-item-510"  data-item-id="510"><a  href="../index.html" class="fusion-textcolor-highlight"><span class="menu-text">TRANG CHỦ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-2926"  data-item-id="2926"><a  href="../vinhomes/index.html" class="fusion-textcolor-highlight"><span class="menu-text">CHỦ ĐẦU TƯ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1501"  data-item-id="1501"><a  href="../vi-tri/index.html" class="fusion-textcolor-highlight"><span class="menu-text">VỊ TRÍ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1500"  data-item-id="1500"><a  href="../tien-ich/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIỆN ÍCH</span></a></li><li   class="menu-item menu-item-type-taxonomy menu-item-object-category menu-item-3590"  data-item-id="3590"><a  href="../tien-do/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIẾN ĐỘ</span></a></li><li   class="menu-item menu-item-type-taxonomy menu-item-object-category current-post-ancestor current-menu-parent current-post-parent menu-item-52"  data-item-id="52"><a  href="../tin-tuc/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIN TỨC</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-54"  data-item-id="54"><a  href="../lien-he/index.html" class="fusion-textcolor-highlight"><span class="menu-text">LIÊN HỆ</span></a></li><li class="fusion-custom-menu-item fusion-main-menu-search fusion-search-overlay"><a class="fusion-main-menu-icon" href="index.html#" aria-label="Search" data-title="Search" title="Search" role="button" aria-expanded="false"></a></li></ul></nav><div class="fusion-mobile-navigation"><ul id="menu-main-menu-2" class="fusion-mobile-menu"><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-home menu-item-510"  data-item-id="510"><a  href="../index.html" class="fusion-textcolor-highlight"><span class="menu-text">TRANG CHỦ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-2926"  data-item-id="2926"><a  href="../vinhomes/index.html" class="fusion-textcolor-highlight"><span class="menu-text">CHỦ ĐẦU TƯ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1501"  data-item-id="1501"><a  href="../vi-tri/index.html" class="fusion-textcolor-highlight"><span class="menu-text">VỊ TRÍ</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-1500"  data-item-id="1500"><a  href="../tien-ich/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIỆN ÍCH</span></a></li><li   class="menu-item menu-item-type-taxonomy menu-item-object-category menu-item-3590"  data-item-id="3590"><a  href="../tien-do/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIẾN ĐỘ</span></a></li><li   class="menu-item menu-item-type-taxonomy menu-item-object-category current-post-ancestor current-menu-parent current-post-parent menu-item-52"  data-item-id="52"><a  href="../tin-tuc/index.html" class="fusion-textcolor-highlight"><span class="menu-text">TIN TỨC</span></a></li><li   class="menu-item menu-item-type-post_type menu-item-object-page menu-item-54"  data-item-id="54"><a  href="../lien-he/index.html" class="fusion-textcolor-highlight"><span class="menu-text">LIÊN HỆ</span></a></li></ul></div><div class="fusion-flyout-menu-icons fusion-flyout-mobile-menu-icons">
+	
+	
+	
+				<a class="fusion-flyout-menu-toggle" aria-hidden="true" aria-label="Toggle Menu" href="index.html#">
+			<div class="fusion-toggle-icon-line"></div>
+			<div class="fusion-toggle-icon-line"></div>
+			<div class="fusion-toggle-icon-line"></div>
+		</a>
+	</div>
+
+
+<div class="fusion-flyout-menu-bg"></div>
+
+<nav class="fusion-mobile-nav-holder fusion-flyout-menu fusion-flyout-mobile-menu" aria-label="Main Menu Mobile"></nav>
+
+	<nav class="fusion-mobile-nav-holder fusion-flyout-menu fusion-flyout-mobile-menu fusion-mobile-sticky-nav-holder" aria-label="Main Menu Mobile Sticky"></nav>
+							</div>
+			</div>
+</div>
+				</div>
+				<div class="fusion-clearfix"></div>
+			</header>
+								
+							<div  id="sliders-container" class="fusion-slider-visibility">
+					</div>
+				
+					
+							
+			<section  class="fusion-page-title-bar fusion-tb-page-title-bar"><div class="fusion-fullwidth fullwidth-box fusion-builder-row-2 fusion-flex-container has-pattern-background has-mask-background hundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-background-color:#ffcc2c;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-justify-content-center fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-7 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:75%;--awb-margin-top-large:20px;--awb-spacing-right-large:2.56%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:2.56%;--awb-width-medium:75%;--awb-order-medium:0;--awb-spacing-right-medium:2.56%;--awb-spacing-left-medium:2.56%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;" data-scroll-devices="small-visibility,medium-visibility,large-visibility"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-image-element " style="text-align:center;--awb-caption-title-font-family:var(--h2_typography-font-family);--awb-caption-title-font-weight:var(--h2_typography-font-weight);--awb-caption-title-font-style:var(--h2_typography-font-style);--awb-caption-title-size:var(--h2_typography-font-size);--awb-caption-title-transform:var(--h2_typography-text-transform);--awb-caption-title-line-height:var(--h2_typography-line-height);--awb-caption-title-letter-spacing:var(--h2_typography-letter-spacing);"><span class=" fusion-imageframe imageframe-dropshadow imageframe-1 hover-type-none" style="border-radius:10px;-webkit-box-shadow: 3px 3px 7px rgba(0,0,0,0.3);box-shadow: 3px 3px 7px rgba(0,0,0,0.3);"><img fetchpriority="high" decoding="async" width="1300" height="974" alt="Vinhomes Hải Vân Bay &#8211; thiên đường giải trí mới thu hút 2.5 triệu khách" title="Đại nhạc hội tại Vinhomes Hải Vân Bay thu hút hàng chục nghìn người tham dự. Ảnh: Vinhomes" src="../wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" class="lazyload img-responsive wp-image-5328" srcset="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271300%27%20height%3D%27974%27%20viewBox%3D%270%200%201300%20974%27%3E%3Crect%20width%3D%271300%27%20height%3D%27974%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-srcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-200x150.webp 200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-300x225.webp 300w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-400x300.webp 400w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-600x450.webp 600w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-768x575.webp 768w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-800x599.webp 800w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-1024x767.webp 1024w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes-1200x899.webp 1200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp 1300w" data-sizes="auto" data-orig-sizes="(max-width: 640px) 100vw, 1300px" /></span></div><div class="fusion-title title fusion-title-2 fusion-sep-none fusion-title-center fusion-title-text fusion-title-size-one" style="--awb-text-color:#000000;--awb-font-size:22px;"><h1 class="fusion-title-heading title-heading-center" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;">Vinhomes Hải Vân Bay &#8211; thiên đường giải trí mới thu hút 2.5 triệu khách</h1></div><div class="fusion-meta-tb fusion-meta-tb-1 floated" style="--awb-height:36px;--awb-font-size:15px;--awb-border-color:#000000;--awb-alignment:space-between;--awb-alignment-medium:flex-start;--awb-alignment-small:flex-start;"><span class="fusion-tb-published-date">Ngày đăng: 29/08/2025</span><span class="fusion-meta-tb-sep"></span><span class="fusion-tb-published-word-count">Số từ: 1933 từ.</span><span class="fusion-meta-tb-sep"></span><span class="fusion-tb-published-read-time">Khoản: 9,8 phút đọc.</span><span class="fusion-meta-tb-sep"></span></div></div></div></div></div>
+</section>
+						<main  id="main" class="clearfix width-100">
+				<div class="fusion-row" style="max-width:100%;">
+
+<section id="content" style="width: 100%;">
+									<div id="post-5329" class="post-5329 post type-post status-publish format-standard has-post-thumbnail hentry category-tin-tuc">
+
+				<div class="post-content">
+					<div class="fusion-fullwidth fullwidth-box fusion-builder-row-3 fusion-flex-container has-pattern-background has-mask-background hundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-justify-content-center fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-8 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:75%;--awb-margin-top-large:0px;--awb-spacing-right-large:2.56%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:2.56%;--awb-width-medium:75%;--awb-order-medium:0;--awb-spacing-right-medium:2.56%;--awb-spacing-left-medium:2.56%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:0px;--awb-spacing-left-small:0px;" data-scroll-devices="small-visibility,medium-visibility,large-visibility"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-content-tb fusion-content-tb-1" style="--awb-text-color:#000000;--awb-margin-top:10px;--awb-content-alignment:justify;--awb-text-transform:none;"><p>Nằm dưới chân đèo Hải Vân huyền thoại, một &#8220;viên ngọc quý&#8221; mới đang tỏa sáng trên bản đồ du lịch miền Trung. Tương tự như thành công của <strong><a href="../index.html">Vinhomes Làng Vân</a></strong>, Vinhomes Hải Vân Bay đang khẳng định vị thế là điểm đến an cư và giải trí hàng đầu với quy mô 512ha và loạt tiện ích đẳng cấp thế giới. Chỉ trong 6 tháng đầu hoạt động, dự án đã đón hơn 2.5 triệu lượt khách, ghi dấu ấn mạnh mẽ trên bản đồ du lịch miền Bắc.</p>
+<p>Với vị trí đắc địa bên vịnh Đà Nẵng, địa thế &#8220;tựa sơn &#8211; hướng thủy&#8221; hiếm có cùng bờ biển trải dài nguyên sơ, Vinhomes Hải Vân Bay không chỉ là nơi an cư lý tưởng mà còn là tâm điểm giải trí sôi động thu hút hàng triệu du khách mỗi năm.</p>
+<h2>Vinhomes Hải Vân Bay có gì đặc biệt?</h2>
+<p><strong>Vinhomes Hải Vân Bay là tổ hợp nghỉ dưỡng toàn diện quy mô 512ha với 5.928 căn thấp tầng đa dạng từ liền kề, song lập đến đơn lập, sở hữu hơn 90% sản phẩm có hình thức sở hữu lâu dài.</strong></p>
+<p>Dự án được chia thành 4 khu chính với phong cách kiến trúc đặc trưng. Khu 1 mang phong cách Châu Âu với 2.668 sản phẩm, nổi bật với suối Lương và trung tâm chăm sóc sức khỏe khoáng nóng. Khu 2 theo phong cách Châu Á với 705 sản phẩm, đặc biệt có biệt thự đồi giật cấp view biển. Khu 3 mang đậm phong cách Nhật Bản với 2.350 sản phẩm dọc đường bờ biển tuyệt đẹp. Còn Khu 4 theo phong cách Monaco với 205 biệt thự đơn lập siêu VIP.</p>
+<p>Điểm nhấn đặc biệt của dự án là sự kết hợp hoàn hảo giữa không gian sống thượng lưu và hệ sinh thái giải trí đa dạng, tạo nên một &#8220;thành phố không bao giờ ngủ&#8221; giữa lòng miền Trung.</p>
+<h2>3 sự kiện giải trí đình đám làm nên tên tuổi</h2>
+<p><strong>Ba sự kiện âm nhạc quy mô lớn đã biến Vinhomes Hải Vân Bay thành tâm điểm giải trí mới của miền Bắc: Đại nhạc hội Wonder Island với sự tham gia của Xiumin (EXO), Đại nhạc hội Kpop với rapper Hàn Quốc B.I, và Đại nhạc hội Chào năm mới 2025.</strong></p>
+<figure style="margin:20px 0px;"> <img class="lazyload" decoding="async" style="width:100%;" src="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271300%27%20height%3D%27841%27%20viewBox%3D%270%200%201300%20841%27%3E%3Crect%20width%3D%271300%27%20height%3D%27841%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/rapper-han-quoc-bieu-dien-tai-dai-nhac-hoi-kpop-ngay-15-3-tai-vinhomes-hai-van-bay-da-nang-anh-giang-huy.webp" alt="Rapper Hàn Quốc biểu diễn tại Đại nhạc hội Kpop ngày 15/3 tại Vinhomes Hải Vân Bay Đà Nẵng. Ảnh: Giang Huy." /><figcaption style="text-align:center;">Rapper Hàn Quốc biểu diễn tại Đại nhạc hội Kpop ngày 15/3 tại Vinhomes Hải Vân Bay Đà Nẵng. Ảnh: Giang Huy.</figcaption></figure>
+<p>Đại nhạc hội Kpop diễn ra ngày 15/3 đã tạo nên &#8220;cơn sốt&#8221; với sự tham gia của dàn ca sĩ GenZ như Marzuz, Quang Hùng MasterD, Quang Anh Rhyder cùng rapper Hàn Quốc B.I nổi tiếng. Sự kiện được dựng quy mô lớn với các hiệu ứng ánh sáng hiện đại và pháo hoa hoành tráng, thu hút hàng chục nghìn người tham dự.</p>
+<figure style="margin:20px 0px;"> <img class="lazyload" decoding="async" style="width:100%;" src="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271300%27%20height%3D%27974%27%20viewBox%3D%270%200%201300%20974%27%3E%3Crect%20width%3D%271300%27%20height%3D%27974%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/dai-nhac-hoi-tai-vinhomes-hai-van-bay-thu-hut-hang-chuc-nghin-nguoi-tham-du-anh-vinhomes.webp" alt="Đại nhạc hội tại Vinhomes Hải Vân Bay thu hút hàng chục nghìn người tham dự. Ảnh: Vinhomes" /><figcaption style="text-align:center;">Đại nhạc hội tại Vinhomes Hải Vân Bay thu hút hàng chục nghìn người tham dú. Ảnh: Vinhomes</figcaption></figure>
+<p>Trước đó, đại nhạc hội quốc tế Wonder Island tháng 6/2024 đã gây ấn tượng mạnh khi mời Xiumin &#8211; thành viên nhóm nhạc EXO đến biểu diễn. Nam ca sĩ đã trình diễn loạt hit đình đám như Feedback, Senrenity, Daisy, Beyond cùng dàn sao Việt như Tăng Duy Tân, Min, Vũ Phụng Tiên, thu hút hàng trăm nghìn khán giả.</p>
+<p>Các sự kiện này không chỉ thu hút giới trẻ mà còn nâng tầm hình ảnh của Hải Phòng trên bản đồ giải trí quốc tế, cho thấy tiềm năng đáp ứng mọi yêu cầu khắt khe của các nghệ sĩ hàng đầu thế giới.</p>
+<h2>7 tiện ích đẳng cấp tạo nên sức hút</h2>
+<p><strong>Vinhomes Hải Vân Bay sở hữu 7 tiện ích đẳng cấp thế giới gồm: bến du thuyền cao cấp, VinWonders &#038; Safari miền Bắc, Vincom Mega Mall Vũ Yên, Vinpearl Horse Academy, sân golf quy mô Đông Nam Á, spa &#038; gym cao cấp, và bể bơi vô cực view biển.</strong></p>
+<p>Bến du thuyền riêng là biểu tượng của phong cách sống thượng lưu, nơi cư dân có thể bắt đầu hành trình khám phá biển cả từ chính ngưỡng cửa nhà. Công viên giải trí VinWonders &amp; Safari đầu tiên tại miền Bắc dự kiến ra mắt đầu tháng 6, hứa hẹn mang đến những trải nghiệm giải trí đỉnh cao.</p>
+<p>Trung tâm thương mại Vincom Mega Mall Vũ Yên sẽ đi vào hoạt động tháng 8, tạo nên khu phố mua sắm sầm uất với chuỗi nhà hàng, cửa hiệu cao cấp. Vinpearl Horse Academy Hải Vân Bay với sân đa năng biểu diễn ngựa rộng gần 1ha có khán đài theo dõi chuyên nghiệp, thường xuyên tổ chức các cuộc diễu hành mã thuật đẳng cấp.</p>
+<h3>Không gian sống thượng lưu</h3>
+<p>Bể bơi vô cực view biển được thiết kế tràn viền, hòa vào cảnh quan đại dương tạo nên trải nghiệm thư giãn đẳng cấp. Spa &amp; gym cao cấp vận hành theo tiêu chuẩn quốc tế mang đến không gian tái tạo năng lượng mỗi ngày.</p>
+<p>Mạng lưới công viên cây xanh và đường dạo bộ ven biển đan xen giữa các phân khu, tạo nên hệ sinh thái sống lành mạnh, gần gũi thiên nhiên. Sân golf mini, sân tennis đến các khu tập yoga ven biển đáp ứng mọi nhu cầu rèn luyện sức khỏe của cư dân.</p>
+<h2>Hạ tầng kết nối thuận tiện chỉ 5 phút về trung tâm</h2>
+<p><strong>Cầu Hoàng Gia đã hợp long ngày 15/3 và dự kiến thông xe kỹ thuật ngày 30/5, đi vào hoạt động tháng 8, rút ngắn khoảng cách từ Vinhomes Hải Vân Bay đến trung tâm Hải Phòng chỉ còn 5 phút di chuyển.</strong></p>
+<p>Hạ tầng trọng điểm này hứa hẹn biến Hải Vân Bay trở thành trung tâm mới của Thành phố Cảng, hiện thực hóa mô hình thành phố đa trung tâm. Cư dân và du khách cũng có thể tiếp cận dự án thông qua hệ thống giao thông đồng bộ với nhiều tuyến đường mới được mở rộng như cầu Hoàng Văn Thụ, cầu Hải Vân Bay 1, đường Vành đai 2.</p>
+<p>Việc hoàn thiện hạ tầng kết nối không chỉ nâng cao giá trị bất động sản mà còn tạo điều kiện thuận lợi cho việc phát triển du lịch và thương mại tại khu vực này.</p>
+<h2>Tương lai phát triển đầy tiềm năng</h2>
+<p><strong>Vinhomes Hải Vân Bay đang khẳng định vị thế điểm đến du lịch hàng đầu miền Bắc với tầm nhìn trở thành &#8220;thành phố không bao giờ ngủ&#8221; thu hút hàng triệu du khách quốc tế mỗi năm.</strong></p>
+<p>Theo thống kê cuối năm 2024 từ Vinhomes, dự án đã đón hơn 2.5 triệu lượt khách chỉ trong 6 tháng đầu hoạt động, đóng góp đáng kể vào sự tăng trưởng của ngành du lịch Hải Phòng. Con số ấn tượng này cho thấy sức hút mạnh mẽ và tiềm năng phát triển không giới hạn của dự án.</p>
+<p>Việc liên tục tổ chức các sự kiện văn hóa &#8211; giải trí quy mô lớn, kết hợp với hệ thống tiện ích đẳng cấp và vị trí địa lý thuận lợi, Vinhomes Hải Vân Bay hứa hẹn sẽ tiếp tục mang đến những trải nghiệm mới mẻ cho du khách trong thời gian tới.</p>
+<p>Chiến lược phát triển bài bản này không chỉ nâng tầm thương hiệu của dự án mà còn góp phần quan trọng thúc đẩy phát triển du lịch của toàn khu vực Hải Phòng, khẳng định vị thế là điểm đến không thể bỏ qua trên bản đồ du lịch Việt Nam.</p>
+</div></div></div></div></div><div class="fusion-fullwidth fullwidth-box fusion-builder-row-4 fusion-flex-container has-pattern-background has-mask-background hundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-padding-top:10px;--awb-background-color:#ffcc2c;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-9 fusion_builder_column_1_1 1_1 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:100%;--awb-margin-top-large:0px;--awb-spacing-right-large:1.92%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:1.92%;--awb-width-medium:100%;--awb-order-medium:0;--awb-spacing-right-medium:1.92%;--awb-spacing-left-medium:1.92%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-title title fusion-title-3 fusion-title-text fusion-title-size-div" style="--awb-margin-top:5px;--awb-margin-bottom:10px;--awb-font-size:20px;"><div class="title-sep-container title-sep-container-left fusion-no-large-visibility fusion-no-medium-visibility fusion-no-small-visibility"><div class="title-sep sep-single sep-solid" style="border-color:#000000;"></div></div><span class="awb-title-spacer fusion-no-large-visibility fusion-no-medium-visibility fusion-no-small-visibility"></span><div class="fusion-title-heading title-heading-left title-heading-tag" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;">BÀI VIẾT LIÊN QUAN</div><span class="awb-title-spacer"></span><div class="title-sep-container title-sep-container-right"><div class="title-sep sep-single sep-solid" style="border-color:#000000;"></div></div></div><div class="fusion-post-cards fusion-post-cards-1 fusion-grid-archive fusion-grid-columns-3" style="--awb-column-spacing:15px;--awb-columns:3;--awb-active-filter-border-size:3px;--awb-filters-height:36px;--awb-row-spacing:10px;"><ul class="fusion-grid fusion-grid-3 fusion-flex-align-items-flex-start fusion-grid-posts-cards"><li class="fusion-layout-column fusion_builder_column fusion-builder-column-10 fusion-flex-column post-card fusion-grid-column fusion-post-cards-grid-column" style="--awb-bg-blend:overlay;--awb-bg-size:cover;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-image-element " style="text-align:center;--awb-aspect-ratio:3 / 2;--awb-margin-top:0px;--awb-caption-title-font-family:var(--h2_typography-font-family);--awb-caption-title-font-weight:var(--h2_typography-font-weight);--awb-caption-title-font-style:var(--h2_typography-font-style);--awb-caption-title-size:var(--h2_typography-font-size);--awb-caption-title-transform:var(--h2_typography-text-transform);--awb-caption-title-line-height:var(--h2_typography-line-height);--awb-caption-title-letter-spacing:var(--h2_typography-letter-spacing);"><span class=" fusion-imageframe imageframe-none imageframe-2 hover-type-none has-aspect-ratio" style="border-radius:10px;"><a class="fusion-no-lightbox" href="../bi-mat-tinh-hoa-nhat-ban-tai-the-komorebi-vinhomes-hai-van-bay/index.html" target="_self" aria-label="Không gian sống hài hòa với thiên nhiên tại The Komorebi &#8211; Vinhomes Hải Vân Bay."><img decoding="async" width="1300" height="731" alt="Bí mật tinh hoa Nhật Bản tại The Komorebi &#8211; Vinhomes Hải Vân Bay" src="../wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay.webp" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay.webp" class="lazyload img-responsive wp-image-5417 img-with-aspect-ratio" data-parent-fit="cover" data-parent-container=".fusion-image-element" srcset="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271300%27%20height%3D%27731%27%20viewBox%3D%270%200%201300%20731%27%3E%3Crect%20width%3D%271300%27%20height%3D%27731%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-srcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-200x112.webp 200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-300x169.webp 300w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-400x225.webp 400w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-600x337.webp 600w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-768x432.webp 768w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-800x450.webp 800w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-1024x576.webp 1024w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay-1200x675.webp 1200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/khong-gian-song-hai-hoa-voi-thien-nhien-tai-the-komorebi-vinhomes-hai-van-bay.webp 1300w" data-sizes="auto" data-orig-sizes="(max-width: 640px) 100vw, 1300px" /></a></span></div><div class="fusion-title title fusion-title-4 fusion-sep-none fusion-title-text fusion-title-size-div" style="--awb-text-color:#000000;--awb-font-size:17px;"><div class="fusion-title-heading title-heading-left title-heading-tag" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;"><a href="../bi-mat-tinh-hoa-nhat-ban-tai-the-komorebi-vinhomes-hai-van-bay/index.html" class="awb-custom-text-color awb-custom-text-hover-color" target="_self">Bí mật tinh hoa Nhật Bản tại The Komorebi &#8211; Vinhomes Hải Vân Bay</a></div></div></div></li>
+<li class="fusion-layout-column fusion_builder_column fusion-builder-column-11 fusion-flex-column post-card fusion-grid-column fusion-post-cards-grid-column" style="--awb-bg-blend:overlay;--awb-bg-size:cover;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-image-element " style="text-align:center;--awb-aspect-ratio:3 / 2;--awb-margin-top:0px;--awb-caption-title-font-family:var(--h2_typography-font-family);--awb-caption-title-font-weight:var(--h2_typography-font-weight);--awb-caption-title-font-style:var(--h2_typography-font-style);--awb-caption-title-size:var(--h2_typography-font-size);--awb-caption-title-transform:var(--h2_typography-text-transform);--awb-caption-title-line-height:var(--h2_typography-line-height);--awb-caption-title-letter-spacing:var(--h2_typography-letter-spacing);"><span class=" fusion-imageframe imageframe-none imageframe-3 hover-type-none has-aspect-ratio" style="border-radius:10px;"><a class="fusion-no-lightbox" href="../kien-truc-may-do-doc-quyen-tai-vinhomes-hai-van-bay-hut-gioi-thuong-luu/index.html" target="_self" aria-label="Sự kiện &#8220;Countdown to greatness&#8221; tại Vinhome Hải Vân Bay Đà Nẵng chào đón năm mới với dàn sao nổi tiếng."><img decoding="async" width="1300" height="780" alt="Kiến trúc &#8220;may đo&#8221; độc quyền tại Vinhomes Hải Vân Bay hút giới thượng lưu" src="../wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng.webp" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng.webp" class="lazyload img-responsive wp-image-5412 img-with-aspect-ratio" data-parent-fit="cover" data-parent-container=".fusion-image-element" srcset="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271300%27%20height%3D%27780%27%20viewBox%3D%270%200%201300%20780%27%3E%3Crect%20width%3D%271300%27%20height%3D%27780%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-srcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-200x120.webp 200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-300x180.webp 300w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-400x240.webp 400w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-600x360.webp 600w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-768x461.webp 768w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-800x480.webp 800w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-1024x614.webp 1024w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng-1200x720.webp 1200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/su-kien-countdown-to-greatness-tai-vinhome-hai-van-bay-da-nang-chao-don-nam-moi-voi-dan-sao-noi-tieng.webp 1300w" data-sizes="auto" data-orig-sizes="(max-width: 640px) 100vw, 1300px" /></a></span></div><div class="fusion-title title fusion-title-5 fusion-sep-none fusion-title-text fusion-title-size-div" style="--awb-text-color:#000000;--awb-font-size:17px;"><div class="fusion-title-heading title-heading-left title-heading-tag" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;"><a href="../kien-truc-may-do-doc-quyen-tai-vinhomes-hai-van-bay-hut-gioi-thuong-luu/index.html" class="awb-custom-text-color awb-custom-text-hover-color" target="_self">Kiến trúc &#8220;may đo&#8221; độc quyền tại Vinhomes Hải Vân Bay hút giới thượng lưu</a></div></div></div></li>
+<li class="fusion-layout-column fusion_builder_column fusion-builder-column-12 fusion-flex-column post-card fusion-grid-column fusion-post-cards-grid-column" style="--awb-bg-blend:overlay;--awb-bg-size:cover;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-image-element " style="text-align:center;--awb-aspect-ratio:3 / 2;--awb-margin-top:0px;--awb-caption-title-font-family:var(--h2_typography-font-family);--awb-caption-title-font-weight:var(--h2_typography-font-weight);--awb-caption-title-font-style:var(--h2_typography-font-style);--awb-caption-title-size:var(--h2_typography-font-size);--awb-caption-title-transform:var(--h2_typography-text-transform);--awb-caption-title-line-height:var(--h2_typography-line-height);--awb-caption-title-letter-spacing:var(--h2_typography-letter-spacing);"><span class=" fusion-imageframe imageframe-none imageframe-4 hover-type-none has-aspect-ratio" style="border-radius:10px;"><a class="fusion-no-lightbox" href="../kham-pha-7-dac-quyen-doc-quyen-tai-cau-lac-bo-hoang-gia-hai-van-bay/index.html" target="_self" aria-label="Màn trình diễn mã thuật “Anh hùng Trần triều” tại Vinhomes Hải Vân Bay mang đến trải nghiệm đầy cảm xúc cho cư dân."><img decoding="async" width="1301" height="867" alt="Khám phá 7 đặc quyền độc quyền tại câu lạc bộ Hoàng Gia Hải Vân Bay" src="../wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan.webp" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan.webp" class="lazyload img-responsive wp-image-5403 img-with-aspect-ratio" data-parent-fit="cover" data-parent-container=".fusion-image-element" srcset="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%271301%27%20height%3D%27867%27%20viewBox%3D%270%200%201301%20867%27%3E%3Crect%20width%3D%271301%27%20height%3D%27867%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-srcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-200x133.webp 200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-300x200.webp 300w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-400x267.webp 400w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-600x400.webp 600w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-768x512.webp 768w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-800x533.webp 800w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-1024x682.webp 1024w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan-1200x800.webp 1200w, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/man-trinh-dien-ma-thuat-anh-hung-tran-trieu-tai-vinhomes-hai-van-bay-mang-den-trai-nghiem-day-cam-xuc-cho-cu-dan.webp 1301w" data-sizes="auto" data-orig-sizes="(max-width: 640px) 100vw, 1301px" /></a></span></div><div class="fusion-title title fusion-title-6 fusion-sep-none fusion-title-text fusion-title-size-div" style="--awb-text-color:#000000;--awb-font-size:17px;"><div class="fusion-title-heading title-heading-left title-heading-tag" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;"><a href="../kham-pha-7-dac-quyen-doc-quyen-tai-cau-lac-bo-hoang-gia-hai-van-bay/index.html" class="awb-custom-text-color awb-custom-text-hover-color" target="_self">Khám phá 7 đặc quyền độc quyền tại câu lạc bộ Hoàng Gia Hải Vân Bay</a></div></div></div></li>
+</ul></div></div></div></div></div>
+				</div>
+			</div>
+			</section>
+						
+					</div>  <!-- fusion-row -->
+				</main>  <!-- #main -->
+				
+				
+								
+					<div class="fusion-tb-footer fusion-footer"><div class="fusion-footer-widget-area fusion-widget-area"><div class="fusion-fullwidth fullwidth-box fusion-builder-row-5 fusion-flex-container has-pattern-background has-mask-background hundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-padding-top:20px;--awb-padding-bottom:20px;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-13 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:30%;--awb-margin-top-large:0px;--awb-spacing-right-large:6.4%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:6.4%;--awb-width-medium:30%;--awb-order-medium:0;--awb-spacing-right-medium:6.4%;--awb-spacing-left-medium:6.4%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-image-element " style="text-align:center;--awb-margin-bottom:10px;--awb-max-width:150px;--awb-caption-title-font-family:var(--h2_typography-font-family);--awb-caption-title-font-weight:var(--h2_typography-font-weight);--awb-caption-title-font-style:var(--h2_typography-font-style);--awb-caption-title-size:var(--h2_typography-font-size);--awb-caption-title-transform:var(--h2_typography-text-transform);--awb-caption-title-line-height:var(--h2_typography-line-height);--awb-caption-title-letter-spacing:var(--h2_typography-letter-spacing);"><span class=" has-fusion-standard-logo fusion-imageframe imageframe-none imageframe-5 hover-type-none"><img decoding="async" src="../wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay.png" data-orig-src="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay.png" srcset="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20width%3D%27167%27%20height%3D%2775%27%20viewBox%3D%270%200%20167%2075%27%3E%3Crect%20width%3D%27167%27%20height%3D%2775%27%20fill-opacity%3D%220%22%2F%3E%3C%2Fsvg%3E" data-srcset="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay.png 1x, https://vinhomehaivanbay.com/wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay-Retina.png 2x" style="max-height:75px;height:auto;" retina_url="https://vinhomehaivanbay.com/wp-content/uploads/2025/08/Logo-Vinhomes-Hai-Van-Bay-Retina.png" width="167" height="75" class="lazyload img-responsive fusion-standard-logo" alt="Vinhomes Hải Vân Bay Logo" /></span></div><div class="fusion-text fusion-text-1" style="--awb-content-alignment:center;--awb-font-size:15px;--awb-text-color:#000000;"><p>Vinhomes Hải Vân Bay Đà Nẵng nơi hội tụ tinh hoa thiên nhiên và đẳng cấp sống hiện đại, mở ra cơ hội đầu tư và an cư lý tưởng cho các gia đình tinh hoa và nhà đầu tư chiến lược. Đây chính là điểm đến của những ai khao khát một cuộc sống trọn vẹn giữa thiên nhiên nguyên bản và tiện ích đẳng cấp quốc tế tại "viên ngọc quý" của miền Trung Việt Nam.</p>
+</div><div class="fusion-text fusion-text-2"><p><ins id="my_linkngon_com"></ins><br />
+<script type='text/javascript' src='https://my.linkngon.com/js.php'></script></p>
+</div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-14 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:40%;--awb-margin-top-large:0px;--awb-spacing-right-large:4.8%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:4.8%;--awb-width-medium:40%;--awb-order-medium:0;--awb-spacing-right-medium:4.8%;--awb-spacing-left-medium:4.8%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-title title fusion-title-7 fusion-sep-none fusion-title-text fusion-title-size-three" style="--awb-text-color:#d39d24;--awb-font-size:18px;"><h3 class="fusion-title-heading title-heading-left" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;">LIÊN HỆ VỚI CHÚNG TÔI</h3></div><ul style="--awb-size:15px;--awb-iconcolor:#d39d24;--awb-textcolor:#000000;--awb-line-height:25.5px;--awb-icon-width:25.5px;--awb-icon-height:25.5px;--awb-icon-margin:10.5px;--awb-content-margin:36px;" class="fusion-checklist fusion-checklist-1 fusion-checklist-default type-icons"><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-tty fas" aria-hidden="true"></i></span><div class="fusion-li-item-content"><strong>Hotline:</strong> 0869667786</div></li><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-envelope-open-text fas" aria-hidden="true"></i></span><div class="fusion-li-item-content">
+<p><strong>Email:</strong> thanhtung.bdsmaster@gmail.com</p>
+</div></li><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-map-marker-alt fas" aria-hidden="true"></i></span><div class="fusion-li-item-content"><strong>Địa chỉ:</strong> Làng Vân, Phường Hòa Hiệp Bắc, Quận Liên Chiểu, TP. Đà Nẵng.</div></li><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-map-marker-alt fas" aria-hidden="true"></i></span><div class="fusion-li-item-content">
+<p><strong>Nhà mẫu:</strong> Làng Vân, Phường Hòa Hiệp Bắc, Quận Liên Chiểu, TP. Đà Nẵng.</p>
+</div></li><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-map-marker-alt fas" aria-hidden="true"></i></span><div class="fusion-li-item-content"><strong>Liên hệ:</strong> Gemek, An Khánh, Hoài Đức, Hà Nội</div></li></ul></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-15 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:30%;--awb-margin-top-large:0px;--awb-spacing-right-large:6.4%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:6.4%;--awb-width-medium:30%;--awb-order-medium:0;--awb-spacing-right-medium:6.4%;--awb-spacing-left-medium:6.4%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-title title fusion-title-8 fusion-sep-none fusion-title-text fusion-title-size-three" style="--awb-text-color:#d39d24;--awb-font-size:18px;"><h3 class="fusion-title-heading title-heading-left" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;">NHỮNG BÀI VIẾT NỔI BẬT</h3></div><ul style="--awb-size:15px;--awb-iconcolor:#d39d24;--awb-textcolor:#000000;--awb-line-height:25.5px;--awb-icon-width:25.5px;--awb-icon-height:25.5px;--awb-icon-margin:10.5px;--awb-content-margin:36px;" class="fusion-checklist fusion-checklist-2 fusion-checklist-default type-icons"><li class="fusion-li-item" style=""><span class="icon-wrapper circle-no"><i class="fusion-li-icon fa-blog fas" aria-hidden="true"></i></span><div class="fusion-li-item-content">
+<p>Vinhomes Hải Vân Bay Đà Nẵng</p>
+</div></li></ul><div class="fusion-text fusion-text-3"><div id="alalocation"></div>
+<p><script src="https://aladigi.com/alatraffic.js?id=UhbVw3rwKd"></script></p>
+</div></div></div></div></div><div class="fusion-fullwidth fullwidth-box fusion-builder-row-6 fusion-flex-container has-pattern-background has-mask-background hundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-background-color:#000c1c;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-16 fusion_builder_column_1_1 1_1 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:100%;--awb-margin-top-large:0px;--awb-spacing-right-large:1.92%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:1.92%;--awb-width-medium:100%;--awb-order-medium:0;--awb-spacing-right-medium:1.92%;--awb-spacing-left-medium:1.92%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-text fusion-text-4" style="--awb-content-alignment:center;--awb-font-size:14px;--awb-text-color:#ffffff;"><p style="text-align: center;">© Vinhomes Hải Vân Bay.</p>
+</div></div></div></div></div>
+</div></div>
+																</div> <!-- wrapper -->
+		</div> <!-- #boxed-wrapper -->
+				<a class="fusion-one-page-text-link fusion-page-load-link" tabindex="-1" href="index.html#" aria-hidden="true">Page load link</a>
+
+		<div class="avada-footer-scripts">
+			<script type="speculationrules">
+{"prefetch":[{"source":"document","where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":["/wp-*.php","/wp-admin/*","/wp-content/uploads/*","/wp-content/*","/wp-content/plugins/*","/wp-content/themes/Avada/*","/*\\?(.+)"]}},{"not":{"selector_matches":"a[rel~=\"nofollow\"]"}},{"not":{"selector_matches":".no-prefetch, .no-prefetch a"}}]},"eagerness":"conservative"}]}
+</script>
+<div 
+	id="pum-1869" 
+	role="dialog" 
+	aria-modal="false"
+	class="pum pum-overlay pum-theme-1854 pum-theme-cutting-edge popmake-overlay pum-click-to-close auto_open click_open" 
+	data-popmake="{&quot;id&quot;:1869,&quot;slug&quot;:&quot;popup-tu-van&quot;,&quot;theme_id&quot;:1854,&quot;cookies&quot;:[{&quot;event&quot;:&quot;pum_sub_form_success&quot;,&quot;settings&quot;:{&quot;name&quot;:&quot;pum-1869&quot;,&quot;key&quot;:&quot;&quot;,&quot;session&quot;:false,&quot;path&quot;:&quot;1&quot;,&quot;time&quot;:&quot;1 month&quot;}},{&quot;event&quot;:&quot;pum_sub_form_success&quot;,&quot;settings&quot;:{&quot;name&quot;:&quot;pum-1869&quot;,&quot;key&quot;:&quot;&quot;,&quot;session&quot;:false,&quot;path&quot;:&quot;1&quot;,&quot;time&quot;:&quot;1 month&quot;}}],&quot;triggers&quot;:[{&quot;type&quot;:&quot;auto_open&quot;,&quot;settings&quot;:{&quot;delay&quot;:20000,&quot;cookie_name&quot;:[&quot;pum-1869&quot;]}},{&quot;type&quot;:&quot;auto_open&quot;,&quot;settings&quot;:{&quot;cookie_name&quot;:[&quot;pum-1869&quot;],&quot;delay&quot;:&quot;90000&quot;}},{&quot;type&quot;:&quot;click_open&quot;,&quot;settings&quot;:{&quot;extra_selectors&quot;:&quot;&quot;,&quot;cookie_name&quot;:null}}],&quot;mobile_disabled&quot;:null,&quot;tablet_disabled&quot;:null,&quot;meta&quot;:{&quot;display&quot;:{&quot;stackable&quot;:false,&quot;overlay_disabled&quot;:false,&quot;scrollable_content&quot;:false,&quot;disable_reposition&quot;:false,&quot;size&quot;:&quot;medium&quot;,&quot;responsive_min_width&quot;:&quot;0%&quot;,&quot;responsive_min_width_unit&quot;:false,&quot;responsive_max_width&quot;:&quot;100%&quot;,&quot;responsive_max_width_unit&quot;:false,&quot;custom_width&quot;:&quot;640px&quot;,&quot;custom_width_unit&quot;:false,&quot;custom_height&quot;:&quot;380px&quot;,&quot;custom_height_unit&quot;:false,&quot;custom_height_auto&quot;:false,&quot;location&quot;:&quot;center top&quot;,&quot;position_from_trigger&quot;:false,&quot;position_top&quot;:&quot;100&quot;,&quot;position_left&quot;:&quot;0&quot;,&quot;position_bottom&quot;:&quot;0&quot;,&quot;position_right&quot;:&quot;0&quot;,&quot;position_fixed&quot;:false,&quot;animation_type&quot;:&quot;fade&quot;,&quot;animation_speed&quot;:&quot;350&quot;,&quot;animation_origin&quot;:&quot;center top&quot;,&quot;overlay_zindex&quot;:false,&quot;zindex&quot;:&quot;1999999999&quot;},&quot;close&quot;:{&quot;text&quot;:&quot;&quot;,&quot;button_delay&quot;:&quot;0&quot;,&quot;overlay_click&quot;:&quot;1&quot;,&quot;esc_press&quot;:&quot;1&quot;,&quot;f4_press&quot;:&quot;1&quot;},&quot;click_open&quot;:[]}}">
+
+	<div id="popmake-1869" class="pum-container popmake theme-1854 pum-responsive pum-responsive-medium responsive size-medium">
+
+				
+				
+		
+				<div class="pum-content popmake-content" tabindex="0">
+			<div class="fusion-fullwidth fullwidth-box fusion-builder-row-1 fusion-flex-container has-pattern-background has-mask-background nonhundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-background-color:#fffbf2;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-content-wrap" style="max-width:1248px;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-0 fusion_builder_column_1_1 1_1 fusion-flex-column" style="--awb-padding-right:20px;--awb-padding-left:20px;--awb-bg-size:cover;--awb-width-large:100%;--awb-margin-top-large:0px;--awb-spacing-right-large:1.92%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:1.92%;--awb-width-medium:100%;--awb-order-medium:0;--awb-spacing-right-medium:1.92%;--awb-spacing-left-medium:1.92%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-title title fusion-title-1 fusion-sep-none fusion-title-center fusion-title-text fusion-title-size-div" style="--awb-text-color:#000000;--awb-margin-top:20px;--awb-font-size:24px;"><div class="fusion-title-heading title-heading-center title-heading-tag" style="font-family:&quot;Be Vietnam Pro&quot;;font-style:normal;font-weight:600;margin:0;font-size:1em;line-height:1.7;">ĐĂNG KÝ TƯ VẤN CHI TIẾT</div></div><div class="fusion-form fusion-form-builder fusion-form-form-wrapper fusion-form-1881" style="--awb-tooltip-text-color:#ffffff;--awb-tooltip-background-color:#333333;--awb-field-margin-top:0px;--awb-field-margin-bottom:0px;" data-form-id="1881" data-config="{&quot;form_id&quot;:&quot;1881&quot;,&quot;form_post_id&quot;:&quot;1881&quot;,&quot;post_id&quot;:5329,&quot;form_type&quot;:&quot;ajax&quot;,&quot;confirmation_type&quot;:&quot;message&quot;,&quot;redirect_url&quot;:&quot;&quot;,&quot;field_labels&quot;:{&quot;Nhucau&quot;:&quot;&quot;,&quot;Hotro&quot;:&quot;&quot;,&quot;HovaTen&quot;:&quot;&quot;,&quot;SoDienThoai&quot;:&quot;&quot;,&quot;DiaChiEmail&quot;:&quot;&quot;,&quot;LoiNhan&quot;:&quot;&quot;},&quot;field_logics&quot;:{&quot;Nhucau&quot;:&quot;&quot;,&quot;Hotro&quot;:&quot;&quot;,&quot;HovaTen&quot;:&quot;&quot;,&quot;SoDienThoai&quot;:&quot;&quot;,&quot;DiaChiEmail&quot;:&quot;&quot;,&quot;LoiNhan&quot;:&quot;&quot;,&quot;notice_1&quot;:&quot;&quot;},&quot;field_types&quot;:{&quot;Nhucau&quot;:&quot;checkbox&quot;,&quot;Hotro&quot;:&quot;checkbox&quot;,&quot;HovaTen&quot;:&quot;text&quot;,&quot;SoDienThoai&quot;:&quot;phone_number&quot;,&quot;DiaChiEmail&quot;:&quot;email&quot;,&quot;LoiNhan&quot;:&quot;text&quot;,&quot;TieuDe&quot;:&quot;hidden&quot;,&quot;submit_1&quot;:&quot;submit&quot;,&quot;notice_1&quot;:&quot;notice&quot;},&quot;nonce_method&quot;:&quot;ajax&quot;}"><form action="index.html" method="post" class="fusion-form fusion-form-1881"><div class="fusion-fullwidth fullwidth-box fusion-builder-row-1-1 fusion-flex-container has-pattern-background has-mask-background nonhundred-percent-fullwidth non-hundred-percent-height-scrolling" style="--awb-border-radius-top-left:0px;--awb-border-radius-top-right:0px;--awb-border-radius-bottom-right:0px;--awb-border-radius-bottom-left:0px;--awb-flex-wrap:wrap;" ><div class="fusion-builder-row fusion-row fusion-flex-align-items-flex-start fusion-flex-content-wrap" style="width:104% !important;max-width:104% !important;margin-left: calc(-4% / 2 );margin-right: calc(-4% / 2 );"><div class="fusion-layout-column fusion_builder_column fusion-builder-column-1 fusion_builder_column_1_2 1_2 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:50%;--awb-margin-top-large:0px;--awb-spacing-right-large:3.84%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:3.84%;--awb-width-medium:50%;--awb-order-medium:0;--awb-spacing-right-medium:3.84%;--awb-spacing-left-medium:3.84%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-checkbox-field fusion-form-label-above" style="" data-form-id="1881"><fieldset><div class="fusion-form-checkbox"><input tabindex="" id="checkbox-nhucau-1-0" type="checkbox" value="Nhận thông tin, giá bán." name="Nhucau[]" class="fusion-form-input" data-holds-private-data="false"/><label for="checkbox-nhucau-1-0">Nhận thông tin, giá bán.</label></div></fieldset></div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-2 fusion_builder_column_1_2 1_2 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:50%;--awb-margin-top-large:0px;--awb-spacing-right-large:3.84%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:3.84%;--awb-width-medium:50%;--awb-order-medium:0;--awb-spacing-right-medium:3.84%;--awb-spacing-left-medium:3.84%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-checkbox-field fusion-form-label-above" style="" data-form-id="1881"><fieldset><div class="fusion-form-checkbox"><input tabindex="" id="checkbox-hotro-2-0" type="checkbox" value="Tham quan dự án, nhà mẫu." name="Hotro[]" class="fusion-form-input" data-holds-private-data="false"/><label for="checkbox-hotro-2-0">Tham quan dự án, nhà mẫu.</label></div></fieldset></div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-3 fusion_builder_column_1_1 1_1 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:100%;--awb-margin-top-large:0px;--awb-spacing-right-large:1.92%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:1.92%;--awb-width-medium:100%;--awb-order-medium:0;--awb-spacing-right-medium:1.92%;--awb-spacing-left-medium:1.92%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-text-field fusion-form-label-above" style="" data-form-id="1881"><div class="fusion-form-input-with-icon"><i class="awb-form-icon fa-address-card fas"></i><input type="text" autocomplete="off" name="HovaTen" id="HovaTen" value=""  class="fusion-form-input" required="true" aria-required="true" placeholder="Họ và tên.. *" data-holds-private-data="false" minlength="0"/></div></div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-4 fusion_builder_column_1_2 1_2 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:50%;--awb-margin-top-large:0px;--awb-spacing-right-large:3.84%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:3.84%;--awb-width-medium:50%;--awb-order-medium:0;--awb-spacing-right-medium:3.84%;--awb-spacing-left-medium:3.84%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-phone-number-field fusion-form-label-above" style="" data-form-id="1881"><div class="fusion-form-input-with-icon"><i class="awb-form-icon fa-tty fas"></i><input type="tel" autocomplete="off"  pattern="^\+?[0-9](?:[\.\-\s]?\d){9,14}$"  data-invalid-notice="Chưa đúng định dạng số điện thoại." name="SoDienThoai" id="SoDienThoai" value=""  class="fusion-form-input" required="true" aria-required="true" placeholder="Số điện thoại.. *" data-holds-private-data="false"/></div></div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-5 fusion_builder_column_1_2 1_2 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:50%;--awb-margin-top-large:0px;--awb-spacing-right-large:3.84%;--awb-margin-bottom-large:20px;--awb-spacing-left-large:3.84%;--awb-width-medium:50%;--awb-order-medium:0;--awb-spacing-right-medium:3.84%;--awb-spacing-left-medium:3.84%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-email-field fusion-form-label-above" style="" data-form-id="1881"><div class="fusion-form-input-with-icon"><i class="awb-form-icon fa-envelope fas"></i><input type="email" autocomplete="off" name="DiaChiEmail" id="DiaChiEmail" value=""  class="fusion-form-input" placeholder="Địa chỉ email.. " data-holds-private-data="false"/></div></div></div></div><div class="fusion-layout-column fusion_builder_column fusion-builder-column-6 fusion_builder_column_1_1 1_1 fusion-flex-column" style="--awb-bg-size:cover;--awb-width-large:100%;--awb-margin-top-large:0px;--awb-spacing-right-large:1.92%;--awb-margin-bottom-large:0px;--awb-spacing-left-large:1.92%;--awb-width-medium:100%;--awb-order-medium:0;--awb-spacing-right-medium:1.92%;--awb-spacing-left-medium:1.92%;--awb-width-small:100%;--awb-order-small:0;--awb-spacing-right-small:1.92%;--awb-spacing-left-small:1.92%;"><div class="fusion-column-wrapper fusion-column-has-shadow fusion-flex-justify-content-flex-start fusion-content-layout-column"><div class="fusion-form-field fusion-form-text-field fusion-form-label-above" style="" data-form-id="1881"><div class="fusion-form-input-with-icon"><i class="awb-form-icon fa-comments fas"></i><input type="text" autocomplete="off" name="LoiNhan" id="LoiNhan" value=""  class="fusion-form-input" placeholder="Lời nhắn cho chúng tôi.. " data-holds-private-data="false" minlength="0"/></div></div><div class="fusion-form-field fusion-form-hidden-field fusion-form-label-above" style="" data-form-id="1881"><input type="hidden" autocomplete="off" name="TieuDe" id="TieuDe" value="Vinhomes Hải Vân Bay &#8211; thiên đường giải trí mới thu hút 2.5 triệu khách"  class="fusion-form-input" data-holds-private-data="false"/></div><div class="fusion-form-field fusion-form-submit-field fusion-form-label-above" style="" data-form-id="1881"><div style="text-align:center;"><button type="submit" class="fusion-button button-flat button-large button-custom fusion-button-default button-1 fusion-button-default-span  form-form-submit button-default" style="--button_bevel_color:#ff5722;--button_accent_color:var(--awb-color1);--button_accent_hover_color:#ffffff;--button_border_hover_color:var(--awb-color1);--button_gradient_top_color:#ff5722;--button_gradient_bottom_color:#ff5722;--button_gradient_top_color_hover:#ff6816;--button_gradient_bottom_color_hover:#ff6816;--button_typography-font-family:&quot;Be Vietnam Pro&quot;;--button_typography-font-style:normal;--button_typography-font-weight:600;--button_margin-top:20px;--button_margin-bottom:20px;" data-form-number="1881" tabindex=""><span class="fusion-button-text awb-button__text awb-button__text--default">ĐĂNG KÝ TƯ VẤN NGAY</span></button></div></div><div class="form-submission-notices data-notice_1" id="fusion-notices-1"><div class="fusion-alert alert success alert-success fusion-alert-center fusion-form-response fusion-form-response-success awb-alert-native-link-color alert-dismissable awb-alert-close-boxed" role="alert"><div class="fusion-alert-content-wrapper"><span class="alert-icon"><i class="awb-icon-check-circle" aria-hidden="true"></i></span><span class="fusion-alert-content">Lời nhắn của quý khách đã được gửi đến phòng kinh doanh của chúng tôi.</span></div><button type="button" class="close toggle-alert" data-dismiss="alert" aria-label="Close">&times;</button></div><div class="fusion-alert alert error alert-danger fusion-alert-center fusion-form-response fusion-form-response-error awb-alert-native-link-color alert-dismissable awb-alert-close-boxed" role="alert"><div class="fusion-alert-content-wrapper"><span class="alert-icon"><i class="awb-icon-exclamation-triangle" aria-hidden="true"></i></span><span class="fusion-alert-content">Đã xảy ra lỗi khi cố gửi tin nhắn của bạn. Vui lòng thử lại sau.</span></div><button type="button" class="close toggle-alert" data-dismiss="alert" aria-label="Close">&times;</button></div></div></div></div></div></div><input type="hidden" name="fusion_privacy_store_ip_ua" value="false"><input type="hidden" name="fusion_privacy_expiration_interval" value="48"><input type="hidden" name="privacy_expiration_action" value="anonymize"></form></div></div></div></div></div>
+		</div>
+
+				
+							<button type="button" class="pum-close popmake-close" aria-label="Close">
+			×			</button>
+		
+	</div>
+
+</div>
+        <!-- if gom all in one show -->
+                <div id="button-contact-vr" class="">
+            <div id="gom-all-in-one"><!-- v3 -->
+                
+                
+                
+                
+
+                
+                
+                
+                
+                
+                                    <!-- zalo -->
+                    <div id="zalo-vr" class="button-contact">
+                        <div class="phone-vr">
+                            <div class="phone-vr-circle-fill"></div>
+                            <div class="phone-vr-img-circle">
+                                <a target="_blank" href="https://zalo.me/0869667786">
+                                    <img alt="Zalo" src="../wp-content/plugins/button-contact-vr/legacy/img/zalo.png" />
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- end zalo -->
+                
+                
+                                    <!-- Phone -->
+                    <div id="phone-vr" class="button-contact">
+                        <div class="phone-vr">
+                            <div class="phone-vr-circle-fill"></div>
+                            <div class="phone-vr-img-circle">
+                                <a href="tel:84789355779">
+                                    <img alt="Phone" src="../wp-content/plugins/button-contact-vr/legacy/img/phone.png" />
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                                        <!-- end phone -->
+
+                                                            </div><!-- end v3 class gom-all-in-one -->
+
+            
+        </div>
+
+        <!-- Add custom css and js -->
+        
+        <script type="text/javascript">
+            if (document.querySelector("#all-in-one-vr")) {
+                document.querySelector("#all-in-one-vr").addEventListener("click", function() {
+                    document.querySelector("#button-contact-vr").classList.toggle("active");
+                });
+            }
+
+            jQuery(document).ready(function($) {
+                // $('#all-in-one-vr').click(function() {
+                //     $('#button-contact-vr').toggleClass('active');
+                // })
+                $('#contact-form-vr').click(function() {
+                    $('#popup-form-contact-vr').addClass('active');
+                })
+                $('div#popup-form-contact-vr .bg-popup-vr,div#popup-form-contact-vr .content-popup-vr .close-popup-vr').click(function() {
+                    $('#popup-form-contact-vr').removeClass('active');
+                })
+                $('#contact-showroom').click(function() {
+                    $('#popup-showroom-vr').addClass('active');
+                })
+                $('div#popup-showroom-vr .bg-popup-vr,.content-popup-vr .close-popup-vr').click(function() {
+                    $('#popup-showroom-vr').removeClass('active');
+                })
+            });
+        </script>
+
+        <!-- end Add custom css and js -->
+
+
+        
+        
+        
+        
+                
+        
+                    <!-- location left right -->
+            <style>
+                #button-contact-vr {
+                    right: 0;
+                }
+
+                .phone-bar a {
+                    left: auto;
+                    right: 30px;
+                    padding: 8px 55px 7px 15px;
+                }
+
+                #button-contact-vr.active #gom-all-in-one .button-contact {
+                    margin-left: 100%;
+                }
+            </style>
+        
+        
+        
+                <script type="text/javascript" id="rocket-browser-checker-js-after">
+/* <![CDATA[ */
+"use strict";var _createClass=function(){function defineProperties(target,props){for(var i=0;i<props.length;i++){var descriptor=props[i];descriptor.enumerable=descriptor.enumerable||!1,descriptor.configurable=!0,"value"in descriptor&&(descriptor.writable=!0),Object.defineProperty(target,descriptor.key,descriptor)}}return function(Constructor,protoProps,staticProps){return protoProps&&defineProperties(Constructor.prototype,protoProps),staticProps&&defineProperties(Constructor,staticProps),Constructor}}();function _classCallCheck(instance,Constructor){if(!(instance instanceof Constructor))throw new TypeError("Cannot call a class as a function")}var RocketBrowserCompatibilityChecker=function(){function RocketBrowserCompatibilityChecker(options){_classCallCheck(this,RocketBrowserCompatibilityChecker),this.passiveSupported=!1,this._checkPassiveOption(this),this.options=!!this.passiveSupported&&options}return _createClass(RocketBrowserCompatibilityChecker,[{key:"_checkPassiveOption",value:function(self){try{var options={get passive(){return!(self.passiveSupported=!0)}};window.addEventListener("test",null,options),window.removeEventListener("test",null,options)}catch(err){self.passiveSupported=!1}}},{key:"initRequestIdleCallback",value:function(){!1 in window&&(window.requestIdleCallback=function(cb){var start=Date.now();return setTimeout(function(){cb({didTimeout:!1,timeRemaining:function(){return Math.max(0,50-(Date.now()-start))}})},1)}),!1 in window&&(window.cancelIdleCallback=function(id){return clearTimeout(id)})}},{key:"isDataSaverModeOn",value:function(){return"connection"in navigator&&!0===navigator.connection.saveData}},{key:"supportsLinkPrefetch",value:function(){var elem=document.createElement("link");return elem.relList&&elem.relList.supports&&elem.relList.supports("prefetch")&&window.IntersectionObserver&&"isIntersecting"in IntersectionObserverEntry.prototype}},{key:"isSlowConnection",value:function(){return"connection"in navigator&&"effectiveType"in navigator.connection&&("2g"===navigator.connection.effectiveType||"slow-2g"===navigator.connection.effectiveType)}}]),RocketBrowserCompatibilityChecker}();
+//# sourceURL=rocket-browser-checker-js-after
+/* ]]> */
+</script>
+<script type="text/javascript" id="rocket-preload-links-js-extra">
+/* <![CDATA[ */
+var RocketPreloadLinksConfig = {"excludeUris":"/(?:.+/)?feed(?:/(?:.+/?)?)?$|/(?:.+/)?embed/|/(index.php/)?(.*)wp-json(/.*|$)|/refer/|/go/|/recommend/|/recommends/","usesTrailingSlash":"1","imageExt":"jpg|jpeg|gif|png|tiff|bmp|webp|avif|pdf|doc|docx|xls|xlsx|php","fileExt":"jpg|jpeg|gif|png|tiff|bmp|webp|avif|pdf|doc|docx|xls|xlsx|php|html|htm","siteUrl":"https://vinhomehaivanbay.com","onHoverDelay":"100","rateThrottle":"3"};
+//# sourceURL=rocket-preload-links-js-extra
+/* ]]> */
+</script>
+<script type="text/javascript" id="rocket-preload-links-js-after">
+/* <![CDATA[ */
+(function() {
+"use strict";var r="function"==typeof Symbol&&"symbol"==typeof Symbol.iterator?function(e){return typeof e}:function(e){return e&&"function"==typeof Symbol&&e.constructor===Symbol&&e!==Symbol.prototype?"symbol":typeof e},e=function(){function i(e,t){for(var n=0;n<t.length;n++){var i=t[n];i.enumerable=i.enumerable||!1,i.configurable=!0,"value"in i&&(i.writable=!0),Object.defineProperty(e,i.key,i)}}return function(e,t,n){return t&&i(e.prototype,t),n&&i(e,n),e}}();function i(e,t){if(!(e instanceof t))throw new TypeError("Cannot call a class as a function")}var t=function(){function n(e,t){i(this,n),this.browser=e,this.config=t,this.options=this.browser.options,this.prefetched=new Set,this.eventTime=null,this.threshold=1111,this.numOnHover=0}return e(n,[{key:"init",value:function(){!this.browser.supportsLinkPrefetch()||this.browser.isDataSaverModeOn()||this.browser.isSlowConnection()||(this.regex={excludeUris:RegExp(this.config.excludeUris,"i"),images:RegExp(".("+this.config.imageExt+")$","i"),fileExt:RegExp(".("+this.config.fileExt+")$","i")},this._initListeners(this))}},{key:"_initListeners",value:function(e){-1<this.config.onHoverDelay&&document.addEventListener("mouseover",e.listener.bind(e),e.listenerOptions),document.addEventListener("mousedown",e.listener.bind(e),e.listenerOptions),document.addEventListener("touchstart",e.listener.bind(e),e.listenerOptions)}},{key:"listener",value:function(e){var t=e.target.closest("a"),n=this._prepareUrl(t);if(null!==n)switch(e.type){case"mousedown":case"touchstart":this._addPrefetchLink(n);break;case"mouseover":this._earlyPrefetch(t,n,"mouseout")}}},{key:"_earlyPrefetch",value:function(t,e,n){var i=this,r=setTimeout(function(){if(r=null,0===i.numOnHover)setTimeout(function(){return i.numOnHover=0},1e3);else if(i.numOnHover>i.config.rateThrottle)return;i.numOnHover++,i._addPrefetchLink(e)},this.config.onHoverDelay);t.addEventListener(n,function e(){t.removeEventListener(n,e,{passive:!0}),null!==r&&(clearTimeout(r),r=null)},{passive:!0})}},{key:"_addPrefetchLink",value:function(i){return this.prefetched.add(i.href),new Promise(function(e,t){var n=document.createElement("link");n.rel="prefetch",n.href=i.href,n.onload=e,n.onerror=t,document.head.appendChild(n)}).catch(function(){})}},{key:"_prepareUrl",value:function(e){if(null===e||"object"!==(void 0===e?"undefined":r(e))||!1 in e||-1===["http:","https:"].indexOf(e.protocol))return null;var t=e.href.substring(0,this.config.siteUrl.length),n=this._getPathname(e.href,t),i={original:e.href,protocol:e.protocol,origin:t,pathname:n,href:t+n};return this._isLinkOk(i)?i:null}},{key:"_getPathname",value:function(e,t){var n=t?e.substring(this.config.siteUrl.length):e;return n.startsWith("/")||(n="/"+n),this._shouldAddTrailingSlash(n)?n+"/":n}},{key:"_shouldAddTrailingSlash",value:function(e){return this.config.usesTrailingSlash&&!e.endsWith("/")&&!this.regex.fileExt.test(e)}},{key:"_isLinkOk",value:function(e){return null!==e&&"object"===(void 0===e?"undefined":r(e))&&(!this.prefetched.has(e.href)&&e.origin===this.config.siteUrl&&-1===e.href.indexOf("?")&&-1===e.href.indexOf("#")&&!this.regex.excludeUris.test(e.href)&&!this.regex.images.test(e.href))}}],[{key:"run",value:function(){"undefined"!=typeof RocketPreloadLinksConfig&&new n(new RocketBrowserCompatibilityChecker({capture:!0,passive:!0}),RocketPreloadLinksConfig).init()}}]),n}();t.run();
+}());
+
+//# sourceURL=rocket-preload-links-js-after
+/* ]]> */
+</script>
+<script type="text/javascript" src="../wp-includes/js/comment-reply.min.js%3Fver=6640932942c7acd8f4f60648534b04be" id="comment-reply-js" async="async" data-wp-strategy="async" fetchpriority="low"></script>
+<script type="text/javascript" id="mpcapi-meta-pixel-js-extra">
+/* <![CDATA[ */
+var mpcapiMetaPixel = {"pixelId":"1187025203562548","ajaxUrl":"https://vinhomehaivanbay.com/wp-admin/admin-ajax.php","nonce":"cb63bbb6c7","debugMode":"","consoleLog":"","enablePixel":"1","enableCapi":"1","enablePageview":"1","enableViewContent":"1","enableAddToCart":"","enablePurchase":"","enableInitiateCheckout":"","enableLead":"1","leadFormSelector":"form.fusion-form-1881\r\nform.fusion-form-655\r\nform.fusion-form-586\r\nform.fusion-form-15","sendInitiateOnCheckoutPage":"","viewContentScrollPercent":"50","viewContentTimeSeconds":"45","currency":"VND","isProductPage":"1","isCheckoutPage":"","isThankYouPage":"","productData":{"content_ids":["5329"],"content_name":"Vinhomes H\u1ea3i V\u00e2n Bay","content_type":"home_listing","value":5000000000,"currency":"VND","content_category":"Th\u1ea5p T\u1ea7ng"},"cartData":null,"pageContentData":{"content_ids":["5329"],"content_name":"Vinhomes H\u1ea3i V\u00e2n Bay","content_type":"home_listing","value":5000000000,"currency":"VND","content_category":"Th\u1ea5p T\u1ea7ng"},"testEventCode":"","userData":[]};
+//# sourceURL=mpcapi-meta-pixel-js-extra
+/* ]]> */
+</script>
+<script data-no-rocket="1" type="text/javascript" src="../wp-content/plugins/meta-pixel-capi/assets/js/pixel.js%3Fver=1.0.17.1" id="mpcapi-meta-pixel-js"></script>
+<script type="text/javascript" src="../wp-includes/js/jquery/ui/core.min.js%3Fver=1.13.3" id="jquery-ui-core-js"></script>
+<script type="text/javascript" src="../wp-includes/js/dist/hooks.min.js%3Fver=dd5603f07f9220ed27f1" id="wp-hooks-js"></script>
+<script type="text/javascript" id="popup-maker-site-js-extra">
+/* <![CDATA[ */
+var pum_vars = {"version":"1.21.5","pm_dir_url":"https://vinhomehaivanbay.com/wp-content/plugins/popup-maker/","ajaxurl":"https://vinhomehaivanbay.com/wp-admin/admin-ajax.php","restapi":"https://vinhomehaivanbay.com/wp-json/pum/v1","rest_nonce":null,"default_theme":"1854","debug_mode":"","disable_tracking":"","home_url":"/","message_position":"top","core_sub_forms_enabled":"1","popups":[],"cookie_domain":"","analytics_enabled":"1","analytics_route":"analytics","analytics_api":"https://vinhomehaivanbay.com/wp-json/pum/v1"};
+var pum_sub_vars = {"ajaxurl":"https://vinhomehaivanbay.com/wp-admin/admin-ajax.php","message_position":"top"};
+var pum_popups = {"pum-1869":{"triggers":[{"type":"auto_open","settings":{"delay":20000,"cookie_name":["pum-1869"]}},{"type":"auto_open","settings":{"cookie_name":["pum-1869"],"delay":"90000"}}],"cookies":[{"event":"pum_sub_form_success","settings":{"name":"pum-1869","key":"","session":false,"path":"1","time":"1 month"}},{"event":"pum_sub_form_success","settings":{"name":"pum-1869","key":"","session":false,"path":"1","time":"1 month"}}],"disable_on_mobile":false,"disable_on_tablet":false,"atc_promotion":null,"explain":null,"type_section":null,"theme_id":"1854","size":"medium","responsive_min_width":"0%","responsive_max_width":"100%","custom_width":"640px","custom_height_auto":false,"custom_height":"380px","scrollable_content":false,"animation_type":"fade","animation_speed":"350","animation_origin":"center top","open_sound":"none","custom_sound":"","location":"center top","position_top":"100","position_bottom":"0","position_left":"0","position_right":"0","position_from_trigger":false,"position_fixed":false,"overlay_disabled":false,"stackable":false,"disable_reposition":false,"zindex":"1999999999","close_button_delay":"0","fi_promotion":null,"close_on_form_submission":true,"close_on_form_submission_delay":"0","close_on_overlay_click":true,"close_on_esc_press":true,"close_on_f4_press":true,"disable_form_reopen":false,"disable_accessibility":false,"theme_slug":"cutting-edge","id":1869,"slug":"popup-tu-van"}};
+//# sourceURL=popup-maker-site-js-extra
+/* ]]> */
+</script>
+<script data-minify="1" type="text/javascript" src="../wp-content/cache/min/1/wp-content/uploads/pum/pum-site-scripts.js%3Fver=1773110096" id="popup-maker-site-js"></script>
+<script type="text/javascript" src="../wp-content/uploads/fusion-scripts/e77d781761aab5b286010a56f5e23e6d.min.js%3Fver=3.12.1" id="fusion-scripts-js"></script>
+<script type="application/ld+json">{"@context":"https:\/\/schema.org","@type":"NewsArticle","headline":"Vinhomes H\u1ea3i V\u00e2n Bay &#8211; thi\u00ean \u0111\u01b0\u1eddng gi\u1ea3i tr\u00ed m\u1edbi thu h\u00fat 2.5 tri\u1ec7u kh\u00e1ch","datePublished":"2025-08-29T15:33:35+07:00","wordCount":1933}</script><!-- Google Tag Manager (noscript) -->
+<noscript><iframe src="https://www.googletagmanager.com/ns.html?id=GTM-NQSKSQBG"
+height="0" width="0" style="display:none;visibility:hidden"></iframe></noscript>
+<!-- End Google Tag Manager (noscript) --><script>window.lazyLoadOptions={elements_selector:"iframe[data-lazy-src]",data_src:"lazy-src",data_srcset:"lazy-srcset",data_sizes:"lazy-sizes",class_loading:"lazyloading",class_loaded:"lazyloaded",threshold:300,callback_loaded:function(element){if(element.tagName==="IFRAME"&&element.dataset.rocketLazyload=="fitvidscompatible"){if(element.classList.contains("lazyloaded")){if(typeof window.jQuery!="undefined"){if(jQuery.fn.fitVids){jQuery(element).parent().fitVids()}}}}}};window.addEventListener('LazyLoad::Initialized',function(e){var lazyLoadInstance=e.detail.instance;if(window.MutationObserver){var observer=new MutationObserver(function(mutations){var image_count=0;var iframe_count=0;var rocketlazy_count=0;mutations.forEach(function(mutation){for(var i=0;i<mutation.addedNodes.length;i++){if(typeof mutation.addedNodes[i].getElementsByTagName!=='function'){continue}
+if(typeof mutation.addedNodes[i].getElementsByClassName!=='function'){continue}
+images=mutation.addedNodes[i].getElementsByTagName('img');is_image=mutation.addedNodes[i].tagName=="IMG";iframes=mutation.addedNodes[i].getElementsByTagName('iframe');is_iframe=mutation.addedNodes[i].tagName=="IFRAME";rocket_lazy=mutation.addedNodes[i].getElementsByClassName('rocket-lazyload');image_count+=images.length;iframe_count+=iframes.length;rocketlazy_count+=rocket_lazy.length;if(is_image){image_count+=1}
+if(is_iframe){iframe_count+=1}}});if(image_count>0||iframe_count>0||rocketlazy_count>0){lazyLoadInstance.update()}});var b=document.getElementsByTagName("body")[0];var config={childList:!0,subtree:!0};observer.observe(b,config)}},!1)</script><script data-no-minify="1" async src="../wp-content/plugins/wp-rocket/assets/js/lazyload/17.8.3/lazyload.min.js"></script><script>function lazyLoadThumb(e,alt,l){var t='<img src="https://i.ytimg.com/vi/ID/hqdefault.jpg" alt="" width="480" height="360">',a='<button class="play" aria-label="Play Youtube video"></button>';if(l){t=t.replace('data-lazy-','');t=t.replace('loading="lazy"','');t=t.replace(/<noscript>.*?<\/noscript>/g,'');}t=t.replace('alt=""','alt="'+alt+'"');return t.replace("ID",e)+a}function lazyLoadYoutubeIframe(){var e=document.createElement("iframe"),t="ID?autoplay=1";t+=0===this.parentNode.dataset.query.length?"":"&"+this.parentNode.dataset.query;e.setAttribute("src",t.replace("ID",this.parentNode.dataset.src)),e.setAttribute("frameborder","0"),e.setAttribute("allowfullscreen","1"),e.setAttribute("allow","accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture"),this.parentNode.parentNode.replaceChild(e,this.parentNode)}document.addEventListener("DOMContentLoaded",function(){var exclusions=[];var e,t,p,u,l,a=document.getElementsByClassName("rll-youtube-player");for(t=0;t<a.length;t++)(e=document.createElement("div")),(u='https://i.ytimg.com/vi/ID/hqdefault.jpg'),(u=u.replace('ID',a[t].dataset.id)),(l=exclusions.some(exclusion=>u.includes(exclusion))),e.setAttribute("data-id",a[t].dataset.id),e.setAttribute("data-query",a[t].dataset.query),e.setAttribute("data-src",a[t].dataset.src),(e.innerHTML=lazyLoadThumb(a[t].dataset.id,a[t].dataset.alt,l)),a[t].appendChild(e),(p=e.querySelector(".play")),(p.onclick=lazyLoadYoutubeIframe)});</script>		</div>
+
+			<section  class="to-top-container to-top-left to-top-floating" aria-labelledby="awb-to-top-label">
+		<a href="index.html#" id="toTop" class="fusion-top-top-link">
+			<span id="awb-to-top-label" class="screen-reader-text">Go to Top</span>
+
+					</a>
+	</section>
+		</body>
+</html>
+
+<!-- This website is like a Rocket, isn't it? Performance optimized by WP Rocket. Learn more: https://wp-rocket.me - Debug: cached@1773461281 -->

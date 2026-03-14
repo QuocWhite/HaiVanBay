@@ -1,0 +1,1622 @@
+/**
+ * MPCAPI Meta Pixel - Frontend Tracking Script
+ * Handles PageView, ViewContent (with scroll/time conditions), AddToCart, InitiateCheckout
+ */
+
+(function($) {
+    'use strict';
+    // ===== Lead field helpers (avoid jQuery unsupported selectors like [attr*=x i]) =====
+    function mpcapiNormalizeStr(v) {
+        return (v || '').toString().toLowerCase();
+    }
+
+    function mpcapiGetAttrHaystack(el) {
+        // Combine multiple attributes for keyword matching
+        var parts = [];
+        ['name', 'id', 'placeholder', 'aria-label', 'class', 'data-name', 'data-field', 'data-id'].forEach(function(k) {
+            var val = el.getAttribute && el.getAttribute(k);
+            if (val) parts.push(val);
+        });
+        return mpcapiNormalizeStr(parts.join(' '));
+    }
+
+    function mpcapiPickFirstValue(formEl, config) {
+        // config: { types:[], keywords:[] }
+        if (!formEl || !formEl.querySelectorAll) return '';
+        var types = (config.types || []).map(mpcapiNormalizeStr);
+        var keywords = (config.keywords || []).map(mpcapiNormalizeStr);
+
+        var nodes = formEl.querySelectorAll('input, textarea, select');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (!el || el.disabled) continue;
+
+            var tag = mpcapiNormalizeStr(el.tagName);
+            var type = mpcapiNormalizeStr(el.getAttribute('type'));
+            var value = (el.value || '').toString().trim();
+
+            // Skip empty values
+            if (!value) continue;
+
+            // Match by explicit input type
+            if (tag === 'input' && types.length && types.indexOf(type) !== -1) {
+                return value;
+            }
+
+            // Match by keyword in attributes (case-insensitive via manual normalize)
+            if (keywords.length) {
+                var hay = mpcapiGetAttrHaystack(el);
+                for (var k = 0; k < keywords.length; k++) {
+                    if (hay.indexOf(keywords[k]) !== -1) {
+                        return value;
+                    }
+                }
+            }
+        }
+        return '';
+    }
+
+    function mpcapiHasField(formEl, config) {
+        if (!formEl || !formEl.querySelectorAll) return false;
+        var types = (config.types || []).map(mpcapiNormalizeStr);
+        var keywords = (config.keywords || []).map(mpcapiNormalizeStr);
+
+        var nodes = formEl.querySelectorAll('input, textarea, select');
+        for (var i = 0; i < nodes.length; i++) {
+            var el = nodes[i];
+            if (!el || el.disabled) continue;
+
+            var tag = mpcapiNormalizeStr(el.tagName);
+            var type = mpcapiNormalizeStr(el.getAttribute('type'));
+
+            if (tag === 'input' && types.length && types.indexOf(type) !== -1) return true;
+
+            if (keywords.length) {
+                var hay = mpcapiGetAttrHaystack(el);
+                for (var k = 0; k < keywords.length; k++) {
+                    if (hay.indexOf(keywords[k]) !== -1) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+
+    // Global tracker object
+    window.mpcapiMetaTracker = {
+        initialized: false,
+        pageLoadTime: Date.now(),
+        maxScrollPercent: 0,
+        viewContentSent: false,
+        isBuyNow: false,
+        sentEvents: {},
+        isBot: false
+    };
+
+    var tracker = window.mpcapiMetaTracker;
+    var config = window.mpcapiMetaPixel || {};
+    // ===== Anti-cache nonce refresh + reliable CAPI queue (WP Rocket / full-page cache safe) =====
+    var MPCAPI_NONCE_KEY = 'mpcapi_meta_nonce_v1';
+    var MPCAPI_QUEUE_KEY = 'mpcapi_meta_event_queue_v1';
+
+    // Use last-known-good nonce if HTML was cached (nonce may be stale otherwise).
+    try {
+        if (window.localStorage) {
+            var _mpcapiNonceRaw = localStorage.getItem(MPCAPI_NONCE_KEY);
+            if (_mpcapiNonceRaw) {
+                var _mpcapiNonceObj = JSON.parse(_mpcapiNonceRaw);
+                if (_mpcapiNonceObj && _mpcapiNonceObj.nonce) {
+                    config.nonce = _mpcapiNonceObj.nonce;
+                }
+            }
+        }
+    } catch (e) {}
+
+    function mpcapiStoreNonce(nonce) {
+        try {
+            if (!window.localStorage) return;
+            localStorage.setItem(MPCAPI_NONCE_KEY, JSON.stringify({ nonce: String(nonce || ''), ts: Date.now() }));
+        } catch (e) {}
+    }
+
+    function mpcapiIsNonceFailure(xhr, bodyText) {
+        var t = '';
+        try { t = (bodyText || (xhr && xhr.responseText) || '').toString().trim(); } catch (e) {}
+        // WP's check_ajax_referer() often returns "-1" on failure.
+        if (t === '-1') return true;
+        if (xhr && (xhr.status === 401 || xhr.status === 403)) return true;
+        // Conservative heuristic
+        if (/nonce/i.test(t) && /(fail|invalid|expired|forbidden|denied)/i.test(t)) return true;
+        return false;
+    }
+
+    function mpcapiRefreshNonce() {
+        // NOTE: no nonce required for this endpoint (by design)
+        return $.ajax({
+            url: config.ajaxUrl,
+            type: 'POST',
+            data: { action: 'mpcapi_meta_get_nonce' },
+            timeout: 8000
+        }).then(function(res){
+            if (res && res.success && res.data && res.data.nonce) {
+                config.nonce = res.data.nonce;
+                mpcapiStoreNonce(config.nonce);
+                return config.nonce;
+            }
+            return config.nonce;
+        }).catch(function(){
+            return config.nonce;
+        });
+    }
+
+    function mpcapiQueueLoad() {
+        try {
+            if (!window.localStorage) return [];
+            var raw = localStorage.getItem(MPCAPI_QUEUE_KEY);
+            if (!raw) return [];
+            var arr = JSON.parse(raw);
+            return Array.isArray(arr) ? arr : [];
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function mpcapiQueueSave(arr) {
+        try {
+            if (!window.localStorage) return;
+            localStorage.setItem(MPCAPI_QUEUE_KEY, JSON.stringify(arr.slice(0, 30)));
+        } catch (e) {}
+    }
+
+    function mpcapiQueuePush(item) {
+        try {
+            var arr = mpcapiQueueLoad();
+            // Deduplicate by key if provided
+            if (item && item.key) {
+                for (var i = 0; i < arr.length; i++) {
+                    if (arr[i] && arr[i].key === item.key) return;
+                }
+            }
+            arr.unshift(Object.assign({ ts: Date.now() }, item || {}));
+            mpcapiQueueSave(arr);
+        } catch (e) {}
+    }
+
+
+    // Debug helper (enable in Admin: Debug Mode)
+    var MPCAPI_DEBUG = !!config.debugMode;
+    // Console helper (enable in Admin: Console Log)
+    var MPCAPI_CONSOLE = !!config.consoleLog;
+
+    // Mask PII when printing to console
+    function mpcapiMaskValue(value, kind) {
+        if (value === null || value === undefined) return value;
+        var str = ('' + value);
+        if (!str) return str;
+        if (kind === 'email') {
+            var parts = str.split('@');
+            if (parts.length === 2) {
+                var left = parts[0];
+                var right = parts[1];
+                return (left.slice(0, 2) || '*') + '***@' + right;
+            }
+            return str.slice(0, 2) + '***';
+        }
+        if (kind === 'phone') {
+            if (str.length <= 4) return '***';
+            return str.slice(0, 2) + '***' + str.slice(-2);
+        }
+        return '***';
+    }
+
+    function mpcapiSanitizeForConsole(obj) {
+        try {
+            if (!obj || typeof obj !== 'object') return obj;
+            var out = Array.isArray(obj) ? [] : {};
+            Object.keys(obj).forEach(function(k) {
+                var v = obj[k];
+                var key = (k || '').toString().toLowerCase();
+                if (key.indexOf('email') !== -1 || key === 'em' || key === 'user_email') {
+                    out[k] = mpcapiMaskValue(v, 'email');
+                    return;
+                }
+                if (key.indexOf('phone') !== -1 || key === 'ph' || key === 'user_phone') {
+                    out[k] = mpcapiMaskValue(v, 'phone');
+                    return;
+                }
+                if (key === 'fn' || key === 'ln') {
+                    out[k] = (v ? '[set]' : '');
+                    return;
+                }
+                if (v && typeof v === 'object') {
+                    out[k] = mpcapiSanitizeForConsole(v);
+                } else {
+                    out[k] = v;
+                }
+            });
+            return out;
+        } catch (e) {
+            return obj;
+        }
+    }
+
+    function dbg() {
+        if (!MPCAPI_DEBUG || !window.console || !console.log) return;
+        try {
+            console.log.apply(console, arguments);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    function clog() {
+        if (!MPCAPI_CONSOLE || !window.console || !console.log) return;
+        try {
+            console.log.apply(console, arguments);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    // Labels used to normalize lead fields coming from Avada/Fusion forms.
+    // Note: This does NOT change Fusion's own AJAX submission payload.
+    var MPCAPI_VI_FIELD_LABELS = {
+        Nhucau: 'Nhu cầu',
+        Hotro: 'Hỗ trợ',
+        HovaTen: 'Họ và tên',
+        SoDienThoai: 'Số điện thoại',
+        DiaChiEmail: 'Địa chỉ email',
+        LoiNhan: 'Lời nhắn',
+        TieuDe: 'Tiêu đề'
+    };
+
+    /**
+     * Simple bot detection on client-side
+     */
+    function detectBot() {
+        // Check for common bot indicators
+        var ua = navigator.userAgent.toLowerCase();
+        var botPatterns = [
+            'bot', 'crawler', 'spider', 'headless', 'phantom', 
+            'selenium', 'puppeteer', 'playwright'
+        ];
+        
+        for (var i = 0; i < botPatterns.length; i++) {
+            if (ua.indexOf(botPatterns[i]) !== -1) {
+                return true;
+            }
+        }
+        
+        // Check for headless browser
+        if (navigator.webdriver) {
+            return true;
+        }
+        
+        // Check for missing features common in headless browsers
+        if (!window.chrome && ua.indexOf('chrome') !== -1) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    /**
+     * Initialize tracker
+     */
+    function init() {
+        if (tracker.initialized) {
+            return;
+        }
+
+        tracker.initialized = true;
+
+        // Capture attribution params on every page load so we can still attribute
+        // a lead even after the user navigates to other pages before submitting the form.
+        captureAttributionParams();
+        captureEntryContext();
+
+        // Multi-touch channel cookie (Google/Facebook/Organic)
+        updateStructuredLeadChannelsFromPage();
+
+        // Stable External ID per browser (for better CAPI match)
+        tracker.externalId = getOrCreateExternalId();
+
+        // Flush queued CAPI events (from previous failed attempts on mobile/4G)
+        (function(){
+            try {
+                var q = mpcapiQueueLoad();
+                if (!q || !q.length) return;
+                // Ensure nonce is fresh, then send a few items
+                mpcapiRefreshNonce().then(function(){
+                    var remaining = [];
+                    var toSend = q.slice(0, 10);
+                    var rest = q.slice(10);
+                    var chain = Promise.resolve();
+                    toSend.forEach(function(item){
+                        chain = chain.then(function(){
+                            return new Promise(function(resolve){
+                                sendCAPIEvent(item.event_name, item.custom_data, item.event_id, function(resp){
+                                    // keep if still failing
+                                    if (!resp || resp.success === false) remaining.push(item);
+                                    resolve();
+                                }, item.user_info || {}, { fromQueue: true });
+                            });
+                        });
+                    });
+                    chain.then(function(){
+                        mpcapiQueueSave(remaining.concat(rest));
+                    });
+                });
+            } catch(e) {}
+        })();
+
+        // External ID for better matching (per browser)
+        tracker.externalId = getOrCreateExternalId();
+
+        dbg('MPCAPI Meta: init', {
+            enableLead: config.enableLead,
+            leadFormSelector: config.leadFormSelector,
+            ajaxUrl: config.ajaxUrl,
+            hasNonce: !!config.nonce,
+            isCheckoutPage: config.isCheckoutPage,
+            isThankYouPage: config.isThankYouPage,
+            external_id: tracker.externalId || ''
+        });
+        
+        // Check for bot
+        tracker.isBot = detectBot();
+        if (tracker.isBot) {
+            dbg('MPCAPI Meta: Bot detected, tracking disabled');
+            return;
+        }
+        
+        // Set session_id cookie for funnel tracking
+        setSessionCookie();
+
+        // Track PageView (deferred for better data completeness / fbq readiness)
+        // - In v1.0.16.7, <head> may send CAPI PageView early, but Pixel PageView is fired here (footer)
+        //   so that fbq is fully ready on desktop browsers.
+        if (config.enablePageview) {
+            var firePV = function() {
+                try { trackPageView(); } catch (e) {}
+            };
+
+            // Best effort: fire after full load (more stable, less missing on desktop)
+            if (document.readyState === 'complete') {
+                setTimeout(firePV, 50);
+            } else {
+                window.addEventListener('load', function() {
+                    setTimeout(firePV, 50);
+                }, { once: true });
+            }
+
+            // Safety fallback in case load event is delayed by third-party resources
+            setTimeout(firePV, 2500);
+        }
+
+        // Setup ViewContent tracking on product pages
+        if (config.enableViewContent && config.isProductPage) {
+            setupViewContentTracking();
+        }
+
+        // Setup AddToCart tracking
+        if (config.enableAddToCart) {
+            setupAddToCartTracking();
+        }
+
+        // Setup Lead (form submit) tracking
+        if (config.enableLead && !config.isCheckoutPage && !config.isThankYouPage) {
+            setupLeadTracking();
+        }
+
+        // Track InitiateCheckout on checkout page (only when NOT using it for order completion)
+        // sendInitiateOnCheckoutPage = true when: option OFF + enable_initiatecheckout ON
+        if (config.sendInitiateOnCheckoutPage && config.isCheckoutPage && config.cartData) {
+            // Double check: don't send if isThankYouPage (sometimes both flags might be true)
+            if (!config.isThankYouPage) {
+                trackInitiateCheckoutOnCheckoutPage(config.cartData);
+            }
+        }
+        
+        // Track event on Thank You page (Purchase or InitiateCheckout depending on option)
+        // LUÔN gửi Pixel ở đây, Meta sẽ dedupe dựa trên event_id
+        if (config.isThankYouPage && config.orderData && config.thankYouEvent) {
+            trackThankYouPageEvent(config.orderData, config.thankYouEvent);
+        }
+    }
+    
+    /**
+     * Set session cookie for funnel tracking
+     */
+    function setSessionCookie() {
+        // Check if cookie already exists
+        if (getCookie('mpcapi_session_id')) {
+            return;
+        }
+        
+        // Generate session ID
+        var sessionId = 'mpcapi_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
+        // Set cookie for 24 hours (same day session)
+        var expires = new Date();
+        expires.setTime(expires.getTime() + (24 * 60 * 60 * 1000));
+        document.cookie = 'mpcapi_session_id=' + sessionId + ';expires=' + expires.toUTCString() + ';path=/;SameSite=Lax';
+    }
+
+    /**
+     * Setup Lead tracking on form submit
+     * - If config.leadFormSelector is empty: auto-detect forms that contain email/phone fields
+     * - Exclude forms with data-mpcapi-no-lead="1"
+     */
+    function setupLeadTracking() {
+        var selectorsRaw = (config.leadFormSelector || '').trim();
+        var selectors = [];
+
+        if (selectorsRaw) {
+            selectors = selectorsRaw
+                .replace(/\r/g, '')
+                .split(/\n|,/)
+                .map(function(s) { return (s || '').trim(); })
+                .filter(function(s) { return s.length > 0; });
+        }
+
+        if (!selectors.length) {
+            selectors = ['form'];
+        }
+
+        dbg('MPCAPI Meta: setupLeadTracking', {selectorsRaw: selectorsRaw, selectors: selectors});
+
+        // Helpful debug: list visible forms on page
+        if (MPCAPI_DEBUG) {
+            try {
+                var forms = Array.from(document.querySelectorAll('form')).slice(0, 30).map(function(f){
+                    return {
+                        id: f.id || '',
+                        cls: f.className || '',
+                        action: f.getAttribute('action') || '',
+                        method: (f.getAttribute('method') || '').toUpperCase(),
+                        inputs: Array.from(f.querySelectorAll('input,textarea,select')).slice(0, 10).map(function(el){
+                            return {name: el.getAttribute('name')||'', id: el.id||'', type: el.type||el.tagName};
+                        })
+                    };
+                });
+                dbg('MPCAPI Meta: forms snapshot', forms);
+            } catch (e) {}
+        }
+
+        // Debug: log submit button clicks (helps when a form doesn't fire submit event)
+        if (MPCAPI_DEBUG) {
+            $(document).on('click', 'form button[type="submit"], form input[type="submit"], form button:not([type]), form [role="button"]', function(ev){
+                try {
+                    var $btn = $(this);
+                    var $f = $btn.closest('form');
+                    if (!$f.length) return;
+                    dbg('MPCAPI Meta: submit click', {
+                        text: ($btn.text() || '').trim(),
+                        id: $f.attr('id') || '',
+                        cls: $f.attr('class') || ''
+                    });
+                } catch (e) {}
+            });
+        }
+
+        selectors.forEach(function(sel) {
+            // Use delegated handler for dynamic forms (CF7, Elementor, etc.)
+            $(document).on('submit', sel, function(e) {
+                try {
+                    var $form = $(this);
+
+                    dbg('MPCAPI Meta: submit captured', {
+                        selector: sel,
+                        id: $form.attr('id') || '',
+                        cls: $form.attr('class') || '',
+                        action: $form.attr('action') || '',
+                        method: ($form.attr('method') || '').toString().toUpperCase()
+                    });
+
+                    // Exclude
+                    if ($form.attr('data-mpcapi-no-lead') === '1') return;
+                    if ($form.data('mpcapiNoLead') === 1) return;
+
+                    // Skip WooCommerce forms / add to cart / checkout
+                    if ($form.hasClass('cart') || $form.hasClass('woocommerce-cart-form')) return;
+                    if ($form.hasClass('checkout') || $form.hasClass('woocommerce-checkout')) return;
+                    if ($form.closest('.woocommerce').length && ($form.hasClass('cart') || $form.hasClass('checkout'))) return;
+
+                    // Auto-detect rule when selector is generic 'form'
+                    if (sel === 'form' && !selectorsRaw) {
+                        var formEl = $form.get(0);
+                        var hasEmail = mpcapiHasField(formEl, { types: ['email'], keywords: ['email', 'mail'] });
+                        var hasPhone = mpcapiHasField(formEl, { types: ['tel'], keywords: ['phone', 'tel', 'mobile', 'sdt', 'so dien thoai', 'sodienthoai'] });
+                        if (!hasEmail && !hasPhone) {
+                            if (MPCAPI_DEBUG) {
+                                try {
+                                    var fields = $form.find('input,textarea,select').slice(0, 15).map(function(){
+                                        return {name: this.name || '', id: this.id || '', type: this.type || this.tagName};
+                                    }).get();
+                                    dbg('MPCAPI Meta: Lead skipped (auto-detect no email/phone)', {fields: fields});
+                                } catch (e) {}
+                            }
+                            return;
+                        }
+                    }
+
+                    // Only enforce phone as required before sending Lead Gate.
+                    // Some builders may still trigger a submit event even when required fields are not filled.
+                    // We only care about phone (others may be optional).
+                    var nativeForm = $form.get(0);
+                    var phoneEl = null;
+                    var phoneVal = '';
+                    try {
+                        if (nativeForm && nativeForm.querySelectorAll) {
+                            var phoneCandidates = nativeForm.querySelectorAll('input[type="tel"], input[name*="phone"], input[id*="phone"], input[name*="tel"], input[id*="tel"], input[name*="mobile"], input[id*="mobile"], input[name*="sdt"], input[id*="sdt"], input[name*="dienthoai"], input[id*="dienthoai"]');
+                            if (phoneCandidates && phoneCandidates.length) {
+                                phoneEl = phoneCandidates[0];
+                            }
+                        }
+                    } catch (eFind) {}
+                    try {
+                        if (phoneEl) {
+                            phoneVal = (phoneEl.value || '').toString().trim();
+                        } else if (nativeForm) {
+                            phoneVal = mpcapiPickFirstValue(nativeForm, { types: ['tel'], keywords: ['phone', 'tel', 'mobile', 'sdt', 'so dien thoai', 'sodienthoai', 'dienthoai'] });
+                        }
+                    } catch (eVal) {}
+
+                    // If we can locate the phone input, rely on native validation first.
+                    // This uses checkValidity()+reportValidity() (browser tooltip) and then stops.
+                    try {
+                        if (phoneEl && phoneEl.checkValidity && !phoneEl.checkValidity()) {
+                            if (phoneEl.reportValidity) phoneEl.reportValidity();
+                            if (e && e.preventDefault) e.preventDefault();
+                            dbg('MPCAPI Meta: Lead skipped (phone invalid)');
+                            return false;
+                        }
+                    } catch (eValid) {}
+
+                    if (!phoneVal) {
+                        try {
+                            if (phoneEl) {
+                                // Force a browser tooltip even if the builder forgot to set required.
+                                if (phoneEl.setCustomValidity) phoneEl.setCustomValidity('Vui lòng nhập số điện thoại.');
+                                if (phoneEl.reportValidity) phoneEl.reportValidity();
+                                if (phoneEl.setCustomValidity) phoneEl.setCustomValidity('');
+                            }
+                        } catch (e2) {}
+                        if (e && e.preventDefault) e.preventDefault();
+                        dbg('MPCAPI Meta: Lead skipped (missing phone)');
+                        return false;
+                    }
+
+                    // Prevent accidental double-fire (Fusion can trigger submit multiple times quickly)
+                    var nowTs = Date.now();
+                    var lastTs = parseInt($form.data('mpcapiLeadSentAt') || '0', 10) || 0;
+                    if (nowTs - lastTs < 1200) return;
+                    $form.data('mpcapiLeadSentAt', nowTs);
+
+                    // Extract user info from form
+                    var formEl2 = $form.get(0);
+
+                    // Prefer explicit Fusion field names if present
+                    function byName(name) {
+                        var $el = $form.find('[name="' + name + '"], [name="' + name + '[]"]');
+                        if (!$el.length) return '';
+                        // checkbox groups
+                        if (($el.attr('type') || '').toLowerCase() === 'checkbox') {
+                            var vals = [];
+                            $form.find('input[type="checkbox"][name="' + name + '"], input[type="checkbox"][name="' + name + '[]"]').each(function () {
+                                if (this.checked) {
+                                    vals.push((this.value || '').toString().trim());
+                                }
+                            });
+                            return vals;
+                        }
+                        var v = $el.first().val();
+                        return (v == null ? '' : v).toString().trim();
+                    }
+
+                    var email = (byName('DiaChiEmail') || mpcapiPickFirstValue(formEl2, { types: ['email'], keywords: ['email', 'mail'] }) || '').toString().trim();
+                    var phone = (byName('SoDienThoai') || mpcapiPickFirstValue(formEl2, { types: ['tel'], keywords: ['phone', 'tel', 'mobile', 'sdt', 'so dien thoai', 'sodienthoai', 'dienthoai'] }) || '').toString().trim();
+
+                    // Keep consistency with earlier phone-only validation (phoneVal).
+                    if (!phone && phoneVal) {
+                        phone = phoneVal;
+                    }
+
+                    var fullName = (byName('HovaTen') || mpcapiPickFirstValue(formEl2, { types: [], keywords: ['ho va ten', 'hovaten', 'ho_ten', 'hoten', 'full name', 'fullname', 'your-name'] }) || '').toString().trim();
+                    var message = (byName('LoiNhan') || '').toString().trim();
+
+                    // Optional checkbox groups
+                    var nhuCau = byName('Nhucau');
+                    var hoTro = byName('Hotro');
+
+                    // Phone is enforced above. Do not add additional required-field checks here.
+
+                    // Derive first/last name from full name (avoid incorrectly using other fields)
+                    var firstName = '';
+                    var lastName = '';
+                    if (fullName) {
+                        var parts = fullName.split(/\s+/).filter(Boolean);
+                        if (parts.length === 1) {
+                            firstName = parts[0];
+                            lastName = '';
+                        } else {
+                            lastName = parts.pop();
+                            firstName = parts.join(' ');
+                        }
+                    }
+
+                    dbg('MPCAPI Meta: Lead fields extracted', { email: email ? '[set]' : '', phone: phone ? '[set]' : '', firstName: firstName ? '[set]' : '', lastName: lastName ? '[set]' : '' });
+                    dbg('MPCAPI Meta: lead fields extracted', { email: email, phone: phone, first_name: firstName, last_name: lastName, full_name: fullName, message: message });
+
+                    var userInfo = {
+					  email: email,
+					  phone: phone,
+					  first_name: firstName,
+					  last_name: lastName,
+					  full_name: fullName,
+					  message: message
+					};
+
+                    // Meta custom_data (allowed params only). Enrich from current page content if available.
+                    var baseContent = (config.pageContentData && typeof config.pageContentData === 'object') ? config.pageContentData :
+                                      ((config.productData && typeof config.productData === 'object') ? config.productData : {});
+                    var metaCustomData = Object.assign({}, baseContent || {});
+                    if (!metaCustomData.content_name) {
+                        metaCustomData.content_name = document.title;
+                    }
+                    if (!metaCustomData.currency && config.currency) {
+                        metaCustomData.currency = config.currency;
+                    }
+                    if (typeof metaCustomData.value === 'undefined' || metaCustomData.value === null) {
+                        metaCustomData.value = 0;
+                    }
+
+                    // Lead meta for n8n (form + page context, not forwarded to Meta)
+                    var leadMeta = {
+                        content_name: metaCustomData.content_name || document.title,
+                        event_source: 'form_submit',
+                        form_id: $form.attr('id') || '',
+                        form_class: $form.attr('class') || '',
+                        form_action: $form.attr('action') || '',
+                        form_method: ($form.attr('method') || '').toString().toUpperCase(),
+                        page_url: window.location.href
+                    };
+
+                    // Normalized form fields (useful for n8n)
+                    leadMeta.field_labels = MPCAPI_VI_FIELD_LABELS;
+                    leadMeta.form_fields = {
+                        Nhucau: Array.isArray(nhuCau) ? nhuCau : (nhuCau ? [nhuCau] : []),
+                        Hotro: Array.isArray(hoTro) ? hoTro : (hoTro ? [hoTro] : []),
+                        HovaTen: fullName,
+                        SoDienThoai: phone,
+                        DiaChiEmail: email,
+                        LoiNhan: message
+                    };
+// Fire Lead event
+                    var eventId = generateEventId();
+
+                    // Send Lead to server gate (n8n). Only after approved -> fire Pixel Lead.
+                    sendLeadGateEvent(metaCustomData, leadMeta, eventId, userInfo)
+                        .then(function(resp) {
+                            dbg('MPCAPI Meta: lead_gate response', resp);
+                            var approved = resp && resp.success && resp.data && resp.data.approved;
+                            var reason = resp && resp.data && (resp.data.reason || resp.data.message) ? (resp.data.reason || resp.data.message) : '';
+
+                            // Attach gate info to log (stored locally only; CAPI uses sanitized payload)
+                            var logCustom = Object.assign({}, metaCustomData, {
+                                lead_meta: leadMeta,
+                                lead_gate_status: approved ? 'approved' : 'blocked',
+                                lead_gate_reason: reason || ''
+                            });
+
+                            if (approved) {
+                                var pixelSent = false;
+                                if (config.enablePixel) {
+                                    pixelSent = trackPixelEvent('Lead', metaCustomData, eventId);
+                                }
+                                logEventToServer('Lead', logCustom, eventId, pixelSent);
+                                clog('MPCAPI Meta: Lead approved', {eventId: eventId, reason: reason});
+                            } else {
+                                // Blocked => do NOT send to Meta
+                                logEventToServer('Lead', logCustom, eventId, 0);
+                                clog('MPCAPI Meta: Lead blocked', {eventId: eventId, reason: reason});
+                            }
+                        })
+                        .catch(function(err) {
+                            // Lead must still be sent to Facebook even if lead_gate request fails.
+                            // We still attempt to log locally and let Pixel fire (CAPI may be missed if request never reached server).
+                            var logCustom = Object.assign({}, metaCustomData, {
+                                lead_meta: leadMeta,
+                                lead_gate_status: 'client_error',
+                                lead_gate_reason: 'client_error'
+                            });
+
+                            var pixelSent = false;
+                            if (config.enablePixel) {
+                                pixelSent = trackPixelEvent('Lead', metaCustomData, eventId);
+                            }
+                            logEventToServer('Lead', logCustom, eventId, pixelSent ? 1 : 0);
+                            console.warn('MPCAPI Meta: Lead gate error (still sent Lead via Pixel)', err);
+                        });
+                } catch (err) {
+                    console.warn('MPCAPI Meta: Lead tracking error', err);
+                }
+            });
+        });
+    }
+
+    /**
+     * Send Lead to server-side gate (n8n) then (if approved) server will send CAPI Lead.
+     * Returns jQuery AJAX promise.
+     */
+    function sendLeadGateEvent(metaCustomData, leadMeta, eventId, userInfo, options) {
+        var payload = {
+            action: 'mpcapi_meta_lead_gate',
+            nonce: config.nonce,
+            event_id: eventId,
+            event_source_url: window.location.href,
+            external_id: (tracker.externalId || ''),
+            debug_console: MPCAPI_CONSOLE ? 1 : 0,
+            // For FB: only allowed keys will be used server-side
+            custom_data: JSON.stringify(metaCustomData || {}),
+            // For n8n: extra meta info (not forwarded to FB)
+            lead_meta: JSON.stringify(leadMeta || {}),
+            user_email: (userInfo && userInfo.email) ? userInfo.email : '',
+            user_phone: (userInfo && userInfo.phone) ? userInfo.phone : '',
+            user_first_name: (userInfo && userInfo.first_name) ? userInfo.first_name : '',
+            user_last_name: (userInfo && userInfo.last_name) ? userInfo.last_name : '',
+            // Extra fields for webhook/CRM usage
+            user_full_name: (userInfo && userInfo.full_name) ? userInfo.full_name : '',
+            user_message: (userInfo && userInfo.message) ? userInfo.message : ''
+        };
+
+        dbg('MPCAPI Meta: lead gate request', {
+            url: config.ajaxUrl,
+            payload: Object.assign({}, payload, {custom_data: '[json]', lead_meta: '[json]'})
+        });
+
+        // Use fetch + keepalive (more reliable than $.ajax when page navigates / popup closes quickly)
+        var params;
+        try {
+            params = new URLSearchParams();
+            Object.keys(payload).forEach(function(k){ params.append(k, payload[k]); });
+        } catch (e) {
+            // Fallback: manual encode
+            var enc = [];
+            Object.keys(payload).forEach(function(k){
+                enc.push(encodeURIComponent(k) + '=' + encodeURIComponent(payload[k]));
+            });
+            params = { toString: function(){ return enc.join('&'); } };
+        }
+
+        return fetch(config.ajaxUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
+            },
+            credentials: 'same-origin',
+            keepalive: true,
+            body: params.toString()
+        }).then(function(res){
+            return res.text().then(function(text){
+                options = options || {};
+                // If nonce is stale, refresh nonce and retry once (survives page caching / WP Rocket).
+                if (!options._retriedNonce && mpcapiIsNonceFailure({ status: res.status, responseText: text }, text)) {
+                    options._retriedNonce = true;
+                    return mpcapiRefreshNonce().then(function(){
+                        return sendLeadGateEvent(metaCustomData, leadMeta, eventId, userInfo, options);
+                    });
+                }
+                dbg('MPCAPI Meta: lead gate http response', {status: res.status, ok: res.ok, textPreview: (text || '').slice(0, 200)});
+                var json;
+                try {
+                    json = JSON.parse(text);
+                } catch (e) {
+                    dbg('MPCAPI Meta: lead gate BAD JSON', {status: res.status, text: (text || '').slice(0, 500)});
+                    throw new Error('Lead gate response is not JSON');
+                }
+                return json;
+            });
+        }).catch(function(err){
+            dbg('MPCAPI Meta: lead gate fetch FAILED', {message: (err && err.message) ? err.message : String(err)});
+            throw err;
+        });
+    }
+
+    
+    /**
+     * Get cookie value
+     */
+    function getCookie(name) {
+        var match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? match[2] : null;
+    }
+
+
+    /**
+     * Set cookie
+     */
+    function setCookie(name, value, days) {
+        try {
+            var expires = '';
+            if (days) {
+                var date = new Date();
+                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+                expires = ';expires=' + date.toUTCString();
+            }
+            document.cookie = name + '=' + encodeURIComponent(value) + expires + ';path=/;SameSite=Lax';
+        } catch (e) {
+            // ignore
+        }
+    }
+
+
+/**
+ * Get current datetime string in Vietnam timezone (Asia/Ho_Chi_Minh)
+ * Format: YYYY-MM-DD HH:mm:ss
+ */
+function getVNNowString() {
+    try {
+        // sv-SE locale produces ISO-like format: 2025-12-29 21:05:33
+        return new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Ho_Chi_Minh', hour12: false });
+    } catch (e) {
+        // Fallback: approximate UTC+7
+        try {
+            var d = new Date(Date.now() + (7 * 60 * 60 * 1000));
+            return d.toISOString().replace('T', ' ').substring(0, 19);
+        } catch (e2) {}
+    }
+    return '';
+}
+
+function safeDecode(v) {
+    if (v === null || typeof v === 'undefined') return '';
+    try { return decodeURIComponent(String(v)); } catch (e) { return String(v); }
+}
+
+function readJsonCookie(name) {
+    try {
+        var raw = getCookie(name);
+        if (!raw) return null;
+        var decoded = safeDecode(raw);
+        if (!decoded) return null;
+        return JSON.parse(decoded);
+    } catch (e) {
+        return null;
+    }
+}
+
+function writeJsonCookie(name, obj, days) {
+    try {
+        var s = JSON.stringify(obj || {});
+        setCookie(name, s, days || 90);
+    } catch (e) {
+        // ignore
+    }
+}
+
+/**
+ * Ensure _fbc cookie exists when fbclid is present (helps attribution under heavy caching)
+ * Format: fb.1.<timestamp_seconds>.<fbclid>
+ */
+function ensureFbcCookie(sp) {
+    try {
+        var existing = getCookie('_fbc');
+        if (existing) return safeDecode(existing);
+
+        var fbclid = sp && sp.get ? sp.get('fbclid') : null;
+        if (!fbclid) return '';
+
+        fbclid = String(fbclid || '').trim();
+        if (!fbclid) return '';
+
+        var ts = Math.floor(Date.now() / 1000);
+        var fbc = 'fb.1.' + ts + '.' + fbclid;
+
+        // Set for 90 days
+        setCookie('_fbc', fbc, 90);
+        return fbc;
+    } catch (e) {
+        return '';
+    }
+}
+
+/**
+ * Persist multi-touch lead channel data into one cookie: mpcapi_lead_channels
+ * Keeps ALL channels the visitor has touched (Google / Facebook / Organic).
+ */
+function updateStructuredLeadChannelsFromPage() {
+    try {
+        if (!window.location) return;
+
+        var sp = new URLSearchParams(window.location.search || '');
+        var now = getVNNowString();
+
+        // Read existing multi-touch object
+        var obj = readJsonCookie('mpcapi_lead_channels') || {};
+
+        // Helper to limit size
+        function clip(str, maxLen) {
+            str = String(str || '');
+            if (str.length > maxLen) return str.substring(0, maxLen);
+            return str;
+        }
+
+        // Determine if this page view is from Google/Facebook touch
+        var gclid = sp.get('gclid') || '';
+        var gbraid = sp.get('gbraid') || '';
+        var wbraid = sp.get('wbraid') || '';
+        var gadCampaignId = sp.get('gad_campaignid') || '';
+
+        var hasGoogleTouch = !!(gclid || gbraid || wbraid || gadCampaignId);
+
+        var utmSource = sp.get('utm_source') || '';
+        var fbclid = sp.get('fbclid') || '';
+        var hasFacebookTouch = false;
+
+        // Create/refresh _fbc if fbclid is present
+        ensureFbcCookie(sp);
+
+        if (fbclid) {
+            hasFacebookTouch = true;
+        } else if (utmSource && /(facebook|meta|instagram|ig)/i.test(String(utmSource))) {
+            // Some setups use only UTM source without fbclid
+            var anyUtm = sp.get('utm_campaign') || sp.get('utm_id') || sp.get('utm_content') || sp.get('utm_term');
+            if (anyUtm) hasFacebookTouch = true;
+        }
+
+        // Update Google object on Google touch
+        if (hasGoogleTouch) {
+            obj.lead_channel_google = {
+                lead_channel: 'Google Ads',
+                gad_campaignid: clip(gadCampaignId || safeDecode(getCookie('mpcapi_mkt_gad_campaignid')), 200),
+                gbraid: clip(gbraid || safeDecode(getCookie('mpcapi_mkt_gbraid')), 200),
+                gclid: clip(gclid || safeDecode(getCookie('mpcapi_mkt_gclid')), 200),
+                date_create: now
+            };
+        }
+
+        // Update Facebook object on Facebook touch
+        if (hasFacebookTouch) {
+            obj.lead_channel_facebook = {
+                lead_channel: 'Facebook Ads',
+                utm_id: clip((sp.get('utm_id') || safeDecode(getCookie('mpcapi_mkt_utm_id'))), 200),
+                utm_content: clip((sp.get('utm_content') || safeDecode(getCookie('mpcapi_mkt_utm_content'))), 200),
+                utm_term: clip((sp.get('utm_term') || safeDecode(getCookie('mpcapi_mkt_utm_term'))), 200),
+                utm_campaign: clip((sp.get('utm_campaign') || safeDecode(getCookie('mpcapi_mkt_utm_campaign'))), 200),
+                date_create: now
+            };
+        }
+
+        // If neither Google nor Facebook touch => treat as Organic touch (Direct/Referral)
+        if (!hasGoogleTouch && !hasFacebookTouch) {
+            var ref = '';
+            try { ref = String(document.referrer || ''); } catch (e) {}
+            var isDirect = !(ref && ref.length > 0);
+
+            var curUrl = '';
+            try { curUrl = String(window.location.href || ''); } catch (e) {}
+
+            obj.lead_channel_organic = {
+                lead_channel: 'Organic Traffic',
+                entry_type: isDirect ? 'direct' : 'referral',
+                referrer: clip(ref, 1000),
+                entry_url: clip(curUrl, 1000),
+                date_create: now
+            };
+        }
+
+        // Persist (90 days)
+        writeJsonCookie('mpcapi_lead_channels', obj, 90);
+    } catch (e) {
+        // ignore
+    }
+}
+    /**
+     * Persist attribution params (Google / Facebook UTMs) into first-party cookies.
+     * This helps when:
+     * - user lands from ads with query params
+     * - then navigates to another page (query params disappear)
+     * - then submits a lead form
+     */
+    function captureAttributionParams() {
+        try {
+            if (!window.location || !window.location.search) return;
+
+            var sp = new URLSearchParams(window.location.search);
+
+            // Google Ads params
+            var gclid = sp.get('gclid');
+            var gbraid = sp.get('gbraid');
+            var gadCampaignId = sp.get('gad_campaignid');
+
+            if (gclid) setCookie('mpcapi_mkt_gclid', gclid, 90);
+            if (gbraid) setCookie('mpcapi_mkt_gbraid', gbraid, 90);
+            if (gadCampaignId) setCookie('mpcapi_mkt_gad_campaignid', gadCampaignId, 90);
+
+            // Facebook UTMs (we only need specific keys, but storing them is cheap)
+            var utmId = sp.get('utm_id');
+            var utmCampaign = sp.get('utm_campaign');
+            var utmContent = sp.get('utm_content');
+            var utmTerm = sp.get('utm_term');
+
+            if (utmId) setCookie('mpcapi_mkt_utm_id', utmId, 90);
+            if (utmCampaign) setCookie('mpcapi_mkt_utm_campaign', utmCampaign, 90);
+            if (utmContent) setCookie('mpcapi_mkt_utm_content', utmContent, 90);
+            if (utmTerm) setCookie('mpcapi_mkt_utm_term', utmTerm, 90);
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    /**
+     * Persist first entry context so we can label Organic as Direct vs Referral.
+     */
+    function captureEntryContext() {
+        try {
+            // Only set once per browser (first touch). Do not overwrite.
+            if (!getCookie('mpcapi_mkt_entry_url')) {
+                var url = '';
+                try { url = String(window.location.href || ''); } catch (e) {}
+                if (url) setCookie('mpcapi_mkt_entry_url', url.substring(0, 1000), 90);
+            }
+
+            if (!getCookie('mpcapi_mkt_referrer')) {
+                var ref = '';
+                try { ref = String(document.referrer || ''); } catch (e) {}
+                if (ref) setCookie('mpcapi_mkt_referrer', ref.substring(0, 1000), 90);
+            }
+
+            if (!getCookie('mpcapi_mkt_entry_type')) {
+                var isDirect = true;
+                try {
+                    var r = String(document.referrer || '');
+                    if (r && r.length > 0) isDirect = false;
+                } catch (e) {}
+                setCookie('mpcapi_mkt_entry_type', isDirect ? 'direct' : 'referral', 90);
+            }
+        } catch (e) {
+            // ignore
+        }
+    }
+
+    /**
+     * Generate UUID (fallback safe)
+     */
+    function mpcapiUUID() {
+        try {
+            if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+        } catch (e) {}
+        // Fallback RFC4122-ish
+        var d = Date.now();
+        var d2 = (performance && performance.now && (performance.now() * 1000)) || 0;
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+            var r = Math.random() * 16;
+            if (d > 0) {
+                r = (d + r) % 16 | 0;
+                d = Math.floor(d / 16);
+            } else {
+                r = (d2 + r) % 16 | 0;
+                d2 = Math.floor(d2 / 16);
+            }
+            return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+        });
+    }
+
+    /**
+     * External ID (per-browser user identifier)
+     * - 1 user/browser => 1 external_id (stored in localStorage + cookie)
+     */
+    function getOrCreateExternalId() {
+        var key = 'mpcapi_external_id';
+        var ext = '';
+        try {
+            ext = (window.localStorage && localStorage.getItem(key)) ? String(localStorage.getItem(key)) : '';
+        } catch (e) {}
+        if (!ext) {
+            try {
+                ext = getCookie(key) ? decodeURIComponent(getCookie(key)) : '';
+            } catch (e) {}
+        }
+        if (!ext) {
+            ext = 'mpcapi_' + mpcapiUUID();
+        }
+        // Persist for 365 days
+        try {
+            if (window.localStorage) localStorage.setItem(key, ext);
+        } catch (e) {}
+        setCookie(key, ext, 365);
+        return ext;
+    }
+
+    /**
+     * Generate unique event ID
+     */
+    function generateEventId() {
+        return 'mpcapi_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+
+    /**
+     * Track event via Pixel
+     * Returns true if sent successfully
+     */
+    function trackPixelEvent(eventName, customData, eventId) {
+        if (typeof fbq === 'undefined') {
+            console.warn('MPCAPI Meta: fbq not defined, skipping Pixel tracking');
+            return false;
+        }
+
+        var params = customData || {};
+
+        // Attach external_id to every Pixel event (custom param)
+        if (tracker.externalId && typeof params === 'object' && !params.external_id) {
+            params.external_id = tracker.externalId;
+        }
+
+        // Proper eventID for deduplication (4th argument)
+        if (eventId) {
+            fbq('track', eventName, params, { eventID: eventId });
+        } else {
+            fbq('track', eventName, params);
+        }
+        
+        // Console payload for verification (optional)
+        clog('MPCAPI Meta Pixel Payload:', eventName, mpcapiSanitizeForConsole(params), eventId ? { eventID: eventId } : {});
+        
+        return true;
+    }
+    
+    /**
+     * Log event to server database
+     * @param pixelSent - true nếu đã gửi qua Pixel
+     */
+    function logEventToServer(eventName, customData, eventId, pixelSent) {
+        $.ajax({
+            url: config.ajaxUrl,
+            type: 'POST',
+            data: {
+                action: 'mpcapi_log_pixel_event',
+                nonce: config.nonce,
+                event_name: eventName,
+                event_id: eventId,
+                custom_data: JSON.stringify(customData),
+                source_url: window.location.href,
+                pixel_sent: pixelSent ? 1 : 0
+            },
+            success: function(response) {
+                clog('MPCAPI Meta Log:', eventName, response);
+            },
+            error: function(xhr, status, error) {
+                console.error('MPCAPI Meta Log Error:', error);
+            }
+        });
+    }
+
+    /**
+     * Send event via CAPI (AJAX)
+     */
+    function sendCAPIEvent(eventName, customData, eventId, callback, userInfo, options) {
+        var capiPayload = {
+            action: 'mpcapi_meta_capi_event',
+            nonce: config.nonce,
+            event_name: eventName,
+            event_id: eventId,
+            external_id: (tracker.externalId || ''),
+            // keep object form for console; request uses JSON string
+            custom_data: customData || {},
+            event_source_url: window.location.href,
+            user_email: (userInfo && userInfo.email) ? userInfo.email : '',
+            user_phone: (userInfo && userInfo.phone) ? userInfo.phone : '',
+            user_first_name: (userInfo && userInfo.first_name) ? userInfo.first_name : '',
+            user_last_name: (userInfo && userInfo.last_name) ? userInfo.last_name : '',
+            debug_console: MPCAPI_CONSOLE ? 1 : 0
+        };
+
+        // Console payload for verification (optional)
+        clog('MPCAPI Meta CAPI Payload:', eventName, mpcapiSanitizeForConsole({
+            event_name: capiPayload.event_name,
+            event_id: capiPayload.event_id,
+            event_source_url: capiPayload.event_source_url,
+            external_id: capiPayload.external_id,
+            custom_data: capiPayload.custom_data,
+            user_email: capiPayload.user_email,
+            user_phone: capiPayload.user_phone,
+            user_first_name: capiPayload.user_first_name,
+            user_last_name: capiPayload.user_last_name
+        }));
+
+        $.ajax({
+            url: config.ajaxUrl,
+            type: 'POST',
+            data: {
+                action: 'mpcapi_meta_capi_event',
+                nonce: config.nonce,
+                event_name: eventName,
+                event_id: eventId,
+                external_id: (tracker.externalId || ''),
+                custom_data: JSON.stringify(customData),
+                event_source_url: window.location.href,
+                user_email: userInfo && userInfo.email ? userInfo.email : '',
+                user_phone: userInfo && userInfo.phone ? userInfo.phone : '',
+                user_first_name: userInfo && userInfo.first_name ? userInfo.first_name : '',
+                user_last_name: userInfo && userInfo.last_name ? userInfo.last_name : '',
+                debug_console: MPCAPI_CONSOLE ? 1 : 0
+            },
+            success: function(response) {
+                clog('MPCAPI Meta CAPI Response:', eventName, response);
+                if (callback) callback(response);
+            },
+            error: function(xhr, status, error) {
+                var respText = '';
+                try { respText = (xhr && xhr.responseText) ? xhr.responseText : ''; } catch (e) {}
+                options = options || {};
+                // If nonce is stale (cached HTML / WP Rocket), refresh nonce and retry once.
+                if (!options._retriedNonce && mpcapiIsNonceFailure(xhr, respText)) {
+                    options._retriedNonce = true;
+                    return mpcapiRefreshNonce().then(function(){
+                        return sendCAPIEvent(eventName, customData, eventId, callback, userInfo, options);
+                    });
+                }
+
+                // Network / transient errors: queue for retry on next pageview.
+                try {
+                    var shouldQueue = !options.fromQueue && (xhr && (xhr.status === 0 || xhr.status === 429 || xhr.status >= 500));
+                    if (shouldQueue) {
+                        mpcapiQueuePush({
+                            key: String(eventName || '') + '|' + String(eventId || ''),
+                            event_name: eventName,
+                            event_id: eventId,
+                            custom_data: customData || {},
+                            user_info: userInfo || {}
+                        });
+                    }
+                } catch (e) {}
+
+                console.error('MPCAPI Meta CAPI Error:', error);
+                if (callback) callback({ success: false, error: error });
+            }
+        });
+    }
+
+    /**
+     * Track event (both Pixel and CAPI based on settings)
+     */
+    function trackEvent(eventName, customData, forceNew) {
+        var eventKey = eventName + '_' + JSON.stringify(customData);
+        
+        // Prevent duplicate sends in same session
+        if (!forceNew && tracker.sentEvents[eventKey]) {
+            clog('MPCAPI Meta: Event already sent', eventName);
+            return;
+        }
+
+        var eventId = generateEventId();
+        
+        // Mark as sent
+        tracker.sentEvents[eventKey] = eventId;
+        
+        var pixelSent = false;
+
+        // Send via Pixel if enabled
+        if (config.enablePixel) {
+            pixelSent = trackPixelEvent(eventName, customData, eventId);
+        }
+        
+        // Log event to database (for report)
+        logEventToServer(eventName, customData, eventId, pixelSent);
+
+        // Send via CAPI if enabled
+        if (config.enableCapi) {
+            sendCAPIEvent(eventName, customData, eventId);
+        }
+    }
+
+    /**
+     * Track PageView
+     */
+    function trackPageView() {
+
+// v1.0.16.8 behavior:
+// - <head> may send CAPI PageView early (reliable).
+// - Pixel PageView must wait until fbq is actually available,
+//   otherwise it can be skipped and never retried.
+
+window.__mpcapi_pageview = window.__mpcapi_pageview || {};
+var pv = window.__mpcapi_pageview;
+
+// Reuse shared event_id from <head> if available
+var sharedId = pv.event_id ? pv.event_id : '';
+var eventId = sharedId || generateEventId();
+pv.event_id = eventId;
+
+// Already sent via Pixel
+if (pv.pixel_sent) return;
+
+// Avoid starting multiple retry loops (init has both load + timeout fallbacks)
+if (pv.pixel_trying) return;
+pv.pixel_trying = true;
+
+var startedAt = Date.now();
+var maxWaitMs = 20000; // wait up to 20s for fbq
+var intervalMs = 250;
+
+function finish(pixelSent) {
+    try {
+        pv.pixel_sent = !!pixelSent;
+        pv.sent = true;
+        pv.pixel_trying = false;
+        // Log ONCE for your report table
+        logEventToServer('PageView', {}, eventId, !!pixelSent);
+    } catch (e) {}
+}
+
+function attempt() {
+    var sent = false;
+
+    // Try to send Pixel PageView only when fbq exists
+    if (config.enablePixel && typeof fbq !== 'undefined') {
+        try {
+            sent = trackPixelEvent('PageView', {}, eventId);
+        } catch (e) {
+            sent = false;
+        }
+    }
+
+    if (sent) {
+        finish(true);
+        return;
+    }
+
+    // Give up after max wait (CAPI still covers PageView)
+    if (Date.now() - startedAt >= maxWaitMs) {
+        finish(false);
+        return;
+    }
+
+    setTimeout(attempt, intervalMs);
+}
+
+// Start attempts now
+attempt();
+
+// Send CAPI only if <head> did not already send it
+if (config.enableCapi && !pv.capi_sent) {
+    sendCAPIEvent('PageView', {}, eventId);
+}
+
+
+    }
+
+    /**
+     * Setup ViewContent tracking with scroll and time conditions
+     */
+    function setupViewContentTracking() {
+        var scrollThreshold = config.viewContentScrollPercent || 50;
+        var timeThreshold = (config.viewContentTimeSeconds || 10) * 1000;
+
+        // Track scroll
+        $(window).on('scroll.mpcapiMeta', function() {
+            var scrollTop = $(window).scrollTop();
+            var docHeight = $(document).height();
+            var winHeight = $(window).height();
+            var scrollPercent = Math.round((scrollTop / (docHeight - winHeight)) * 100);
+
+            if (scrollPercent > tracker.maxScrollPercent) {
+                tracker.maxScrollPercent = scrollPercent;
+            }
+
+            checkViewContentConditions(scrollThreshold, timeThreshold);
+        });
+
+        // Check time periodically
+        var timeCheckInterval = setInterval(function() {
+            checkViewContentConditions(scrollThreshold, timeThreshold);
+            
+            if (tracker.viewContentSent) {
+                clearInterval(timeCheckInterval);
+            }
+        }, 1000);
+
+        // Also check on visibility change
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                checkViewContentConditions(scrollThreshold, timeThreshold);
+            }
+        });
+    }
+
+    /**
+     * Check if ViewContent conditions are met
+     */
+    function checkViewContentConditions(scrollThreshold, timeThreshold) {
+        if (tracker.viewContentSent) {
+            return;
+        }
+
+        var timeOnPage = Date.now() - tracker.pageLoadTime;
+        var scrollMet = tracker.maxScrollPercent >= scrollThreshold;
+        var timeMet = timeOnPage >= timeThreshold;
+
+        if (scrollMet && timeMet) {
+            tracker.viewContentSent = true;
+            trackViewContent();
+            $(window).off('scroll.mpcapiMeta');
+        }
+    }
+
+    /**
+     * Track ViewContent
+     */
+    function trackViewContent() {
+        if (!config.productData) {
+            return;
+        }
+
+        var customData = {
+            content_ids: config.productData.content_ids,
+            content_name: config.productData.content_name,
+            content_type: config.productData.content_type,
+            content_category: config.productData.content_category || '',
+            value: config.productData.value,
+            currency: config.currency
+        };
+
+        trackEvent('ViewContent', customData);
+    }
+
+    /**
+     * Setup AddToCart tracking
+     */
+    function setupAddToCartTracking() {
+        // Single product add to cart
+        $(document).on('click', '.single_add_to_cart_button:not(.disabled)', function(e) {
+            var $btn = $(this);
+            var $form = $btn.closest('form.cart');
+            
+            // Skip if variations not selected
+            if ($btn.hasClass('wc-variation-selection-needed')) {
+                return;
+            }
+
+            var quantity = parseInt($form.find('input.qty').val()) || 1;
+            
+            // Use product data from config
+            if (config.productData) {
+                trackAddToCart(config.productData, quantity);
+            }
+        });
+
+        // Archive/shop page AJAX add to cart
+        $(document).on('click', '.add_to_cart_button:not(.single_add_to_cart_button)', function(e) {
+            var $btn = $(this);
+            var productId = $btn.data('product_id');
+            var quantity = parseInt($btn.data('quantity')) || 1;
+            
+            // Get data from attributes
+            var productData = {
+                content_ids: [$btn.data('smkt-content-id') || String(productId)],
+                content_name: $btn.data('smkt-product-name') || '',
+                content_type: 'product',
+                value: parseFloat($btn.data('smkt-product-price')) || 0,
+                currency: config.currency
+            };
+
+            trackAddToCart(productData, quantity);
+        });
+
+        // WooCommerce AJAX add to cart success
+        $(document.body).on('added_to_cart', function(e, fragments, cart_hash, $button) {
+            // Event already tracked on click, skip
+        });
+
+        // Buy Now buttons
+        $(document).on('click', '.buy-now, .buy_now, .btn-buy-now, [data-buy-now]', function() {
+            tracker.isBuyNow = true;
+            
+            if (config.productData) {
+                var quantity = parseInt($('input.qty').val()) || 1;
+                trackAddToCart(config.productData, quantity);
+            }
+        });
+    }
+
+    /**
+     * Track AddToCart
+     */
+    function trackAddToCart(productData, quantity) {
+        quantity = quantity || 1;
+
+        var customData = {
+            content_ids: productData.content_ids,
+            content_name: productData.content_name,
+            content_type: 'product',
+            value: productData.value * quantity,
+            currency: config.currency,
+            contents: [{
+                id: productData.content_ids[0],
+                quantity: quantity,
+                item_price: productData.value
+            }],
+            num_items: quantity
+        };
+
+        if (productData.content_category) {
+            customData.content_category = productData.content_category;
+        }
+
+        trackEvent('AddToCart', customData, true);
+    }
+
+    /**
+     * Track InitiateCheckout on checkout page (when option is OFF)
+     * cartData comes from MPCAPI_Helper::get_cart_data()
+     */
+    function trackInitiateCheckoutOnCheckoutPage(cartData) {
+        var customData = {
+            content_ids: cartData.content_ids || [],
+            contents: cartData.contents || [],
+            content_type: 'product',
+            value: cartData.value || 0,
+            currency: config.currency,
+            num_items: cartData.num_items || 0
+        };
+
+        trackEvent('InitiateCheckout', customData);
+    }
+    
+    /**
+     * Track event on Thank You page (Purchase or InitiateCheckout)
+     * This sends via Pixel and/or CAPI based on settings
+     * CAPI for Purchase/InitiateCheckout is handled server-side via hooks
+     */
+    function trackThankYouPageEvent(orderData, eventName) {
+        // Check if already sent in this session
+        var eventKey = 'thankyou_' + eventName + '_' + orderData.order_id;
+        if (tracker.sentEvents[eventKey]) {
+            clog('MPCAPI Meta: ' + eventName + ' already sent for this order');
+            return;
+        }
+        
+        var customData = {
+            content_ids: orderData.content_ids || [],
+            contents: orderData.contents || [],
+            content_type: 'product',
+            value: orderData.value || 0,
+            currency: config.currency,
+            num_items: orderData.num_items || 0,
+            order_id: orderData.order_id || ''
+        };
+        
+        // Sử dụng event_id từ server nếu có (để dedupe với CAPI)
+        // Nếu không có, generate mới
+        var eventId = config.serverEventId || generateEventId();
+        
+        // Mark as sent
+        tracker.sentEvents[eventKey] = eventId;
+        
+        var pixelSent = false;
+        
+        // Send via Pixel only if enabled
+        if (config.enablePixel) {
+            pixelSent = trackPixelEvent(eventName, customData, eventId);
+        }
+        
+        // LUÔN log event để cập nhật pixel_sent status
+        // CAPI cho Purchase/InitiateCheckout đã được gửi từ server-side hooks
+        // Log này sẽ UPDATE record đã tồn tại (từ CAPI) với pixel_sent status
+        logEventToServer(eventName, customData, eventId, pixelSent);
+        
+        clog('MPCAPI Meta: ' + eventName + ' tracked on Thank You page (event_id: ' + eventId + ', pixel: ' + pixelSent + ')', mpcapiSanitizeForConsole(customData));
+    }
+
+    // Initialize when DOM ready
+    $(document).ready(function() {
+        init();
+    });
+
+    // Expose functions for external use
+    window.mpcapiMetaTracker.trackEvent = trackEvent;
+    window.mpcapiMetaTracker.trackAddToCart = trackAddToCart;
+
+})(jQuery);
